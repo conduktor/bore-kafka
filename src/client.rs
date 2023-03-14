@@ -10,8 +10,9 @@ use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
+use crate::kafka::kafka_proxy;
 use crate::shared::{
-    proxy, ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT,
+    ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT,
 };
 
 /// State structure for the client.
@@ -117,7 +118,7 @@ impl Client {
         let parts = remote_conn.into_parts();
         debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
         local_conn.write_all(&parts.read_buf).await?; // mostly of the cases, this will be empty
-        proxy(local_conn, parts.io).await?;
+        kafka_proxy(local_conn, parts.io).await?;
         Ok(())
     }
 }
