@@ -72,6 +72,8 @@ async fn run(command: Command) -> Result<()> {
                 .unwrap()
                 .add_connection(Url::new(local_host, local_port))
                 .await;
+
+            return_infinite_future().await;
         }
         Command::Server { min_port, secret } => {
             Server::new(min_port, secret.as_deref()).listen().await?;
@@ -79,6 +81,12 @@ async fn run(command: Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn return_infinite_future() {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    }
 }
 
 fn main() -> Result<()> {

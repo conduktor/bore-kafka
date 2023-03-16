@@ -18,7 +18,7 @@ use kafka_protocol::protocol::{
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::connection_pool::{ProxyState, Url};
 
@@ -235,6 +235,7 @@ pub fn adapt_metadata(
     //apply port mapping to the broker list
 
     for broker in metadata.brokers.values_mut() {
+        info!("broker: {:?}", broker);
         broker.host = StrBytes::from_str("bore.pub"); // FIXME
         broker.port = lock
             .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
