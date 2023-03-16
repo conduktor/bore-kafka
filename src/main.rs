@@ -61,13 +61,17 @@ async fn run(command: Command) -> Result<()> {
             port,
             secret,
         } => {
-            let mut relay = Arc::new(RwLock::new(ProxyState::new(secret)));
+            let mut proxy_state = Arc::new(RwLock::new(ProxyState::new(secret)));
             // let auto_pointer = Arc::new(relay);
-            relay.write().unwrap().set_auto_pointer(relay.clone());
-            relay
+            proxy_state
                 .write()
                 .unwrap()
-                .add_connection(Url::new(local_host, local_port));
+                .set_auto_pointer(proxy_state.clone());
+            proxy_state
+                .write()
+                .unwrap()
+                .add_connection(Url::new(local_host, local_port))
+                .await;
         }
         Command::Server { min_port, secret } => {
             Server::new(min_port, secret.as_deref()).listen().await?;

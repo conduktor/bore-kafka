@@ -29,7 +29,7 @@ pub struct Client {
     local_port: u16,
 
     /// Port that is publicly available on the remote.
-    remote_port: u16,
+    pub remote_port: u16,
 
     /// Optional secret used to authenticate clients.
     auth: Option<Authenticator>,

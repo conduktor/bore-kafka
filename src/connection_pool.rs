@@ -24,7 +24,7 @@ impl Url {
 }
 
 pub struct ProxyState {
-    pub connections: HashMap<Url, JoinHandle<()>>,
+    pub connections: HashMap<Url, u16>,
     secret: Option<String>,
     pub auto_pointer: Option<Arc<RwLock<ProxyState>>>,
     pub broker_store: Arc<RwLock<IndexMap<BrokerId, MetadataResponseBroker>>>,
@@ -48,35 +48,57 @@ impl ProxyState {
         self.auto_pointer.clone().expect("cannot be none")
     }
 
+    pub fn compute_added_brokers(
+        &mut self,
+        new_brokers: &IndexMap<BrokerId, MetadataResponseBroker>,
+    ) -> Vec<Url> {
+        let mut added_brokers = Vec::new();
+        let mut broker_store = self.broker_store.write().unwrap();
+        for (broker_id, broker) in new_brokers {
+            if !broker_store.contains_key(broker_id) {
+                broker_store.insert(*broker_id, broker.clone());
+                added_brokers.push(Url::new(
+                    broker.host.to_string().clone(),
+                    broker.port as u16,
+                ));
+
+                // self.add_connection(Url::new(broker.host.to_string().clone(), broker.port as u16));
+            }
+        }
+        added_brokers
+    }
+
     fn connection_does_not_exist(&self, url: &Url) -> bool {
         !self.connections.contains_key(&url)
     }
 
-    pub fn add_connection(&mut self, url: Url) {
+    pub async fn add_connection(&mut self, url: Url) {
         if self.connection_does_not_exist(&url) {
             let local_url_to_relay = url.clone();
             let s = self.secret.clone();
             let at = self.get_auto_pointer();
 
-            let handler = tokio::spawn(async move {
+            //port = 0 => to force random port
+            let client = Client::new(
+                &local_url_to_relay.host.clone(),
+                local_url_to_relay.port.clone(),
+                &CONDUKTOR_BORE_SERVER,
+                0,
+                s.as_deref(),
+                at,
+            )
+            .await
+            .unwrap();
+
+            let remote_port = client.remote_port.clone();
+
+            tokio::spawn(async move {
                 // Process each socket concurrently.
-                //port = 0 => to force random port
-                Client::new(
-                    &local_url_to_relay.host.clone(),
-                    local_url_to_relay.port.clone(),
-                    &CONDUKTOR_BORE_SERVER,
-                    0,
-                    s.as_deref(),
-                    at,
-                )
-                .await
-                .unwrap()
-                .listen()
-                .await
-                .unwrap();
+
+                client.listen().await.unwrap();
             });
 
-            self.connections.insert(url, handler);
+            self.connections.insert(url, remote_port);
         };
     }
 
