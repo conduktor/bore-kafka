@@ -17,6 +17,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod connection_pool;
+pub mod kafka;
 pub mod server;
 pub mod shared;
-pub mod kafka;

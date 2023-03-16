@@ -1,5 +1,11 @@
+use std::sync::{Arc, RwLock};
+
 use anyhow::Result;
-use bore_cli::{client::Client, server::Server};
+use bore_cli::{
+    client::Client,
+    connection_pool::{ProxyState, Url},
+    server::Server,
+};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -55,8 +61,13 @@ async fn run(command: Command) -> Result<()> {
             port,
             secret,
         } => {
-            let client = Client::new(&local_host, local_port, &to, port, secret.as_deref()).await?;
-            client.listen().await?;
+            let mut relay = Arc::new(RwLock::new(ProxyState::new(secret)));
+            // let auto_pointer = Arc::new(relay);
+            relay.write().unwrap().set_auto_pointer(relay.clone());
+            relay
+                .write()
+                .unwrap()
+                .add_connection(Url::new(local_host, local_port));
         }
         Command::Server { min_port, secret } => {
             Server::new(min_port, secret.as_deref()).listen().await?;

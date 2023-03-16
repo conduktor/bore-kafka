@@ -1,20 +1,26 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
+use bytes::Buf;
 use bytes::{BufMut, BytesMut};
+use codec::LengthDelimitedCodec;
 use dashmap::DashMap;
 use futures_util::{StreamExt, TryStreamExt};
+use indexmap::IndexMap;
+use kafka_protocol::messages::metadata_response::MetadataResponseBroker;
 use kafka_protocol::messages::*;
-use kafka_protocol::protocol::{Decodable, DecodeError, Encodable, EncodeError, HeaderVersion, StrBytes, types};
 use kafka_protocol::protocol::buf::{ByteBuf, NotEnoughBytesError};
+use kafka_protocol::protocol::{
+    types, Decodable, DecodeError, Encodable, EncodeError, HeaderVersion, StrBytes,
+};
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec;
-use bytes::Buf;
-use codec::LengthDelimitedCodec;
 use tracing::debug;
+
+use crate::connection_pool::ProxyState;
 
 #[derive(Debug)]
 pub enum ErrorKind {
@@ -114,13 +120,22 @@ impl codec::Decoder for KafkaServerCodec {
         if let Some(mut bytes) = self.length_codec.decode(src)? {
             let correlation_id = bytes.peek_bytes(4..8).get_i32();
             match self.inflight.remove(&correlation_id) {
-                Some((_, RequestKeyAndVersion { api_key: ApiKey::MetadataKey, api_version })) => {
+                Some((
+                    _,
+                    RequestKeyAndVersion {
+                        api_key: ApiKey::MetadataKey,
+                        api_version,
+                    },
+                )) => {
                     bytes.advance(size_of::<u32>()); // skip length
-                    let header = ResponseHeader::decode(&mut bytes, MetadataResponse::header_version(api_version))?;
+                    let header = ResponseHeader::decode(
+                        &mut bytes,
+                        MetadataResponse::header_version(api_version),
+                    )?;
                     let response = MetadataResponse::decode(&mut bytes, api_version)?;
                     Ok(Some(KafkaResponse::Metadata(api_version, header, response)))
                 }
-                _ => Ok(Some(KafkaResponse::UndecodedResponse(bytes)))
+                _ => Ok(Some(KafkaResponse::UndecodedResponse(bytes))),
             }
         } else {
             Ok(None)
@@ -128,15 +143,10 @@ impl codec::Decoder for KafkaServerCodec {
     }
 }
 
-
 impl codec::Encoder<KafkaResponse> for KafkaServerCodec {
     type Error = ErrorKind;
 
-    fn encode(
-        &mut self,
-        item: KafkaResponse,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: KafkaResponse, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
             KafkaResponse::Metadata(version, header, response) => {
                 let mut bytes = BytesMut::new();
@@ -146,32 +156,42 @@ impl codec::Encoder<KafkaResponse> for KafkaServerCodec {
                 dst.put_u32(bytes.len() as u32);
                 dst.put_slice(&bytes);
             }
-            KafkaResponse::UndecodedResponse(bytes) => {
-                dst.put_slice(&bytes)
-            }
+            KafkaResponse::UndecodedResponse(bytes) => dst.put_slice(&bytes),
         }
         Ok(())
     }
 }
 
-pub async fn kafka_proxy<S1, S2>(local: S1, remote: S2) -> Result<(), ErrorKind>
-    where
-        S1: AsyncRead + AsyncWrite + Unpin,
-        S2: AsyncRead + AsyncWrite + Unpin,
+pub async fn kafka_proxy<S1, S2>(
+    local: S1,
+    remote: S2,
+    proxy_state: Arc<RwLock<ProxyState>>,
+) -> Result<(), ErrorKind>
+where
+    S1: AsyncRead + AsyncWrite + Unpin,
+    S2: AsyncRead + AsyncWrite + Unpin,
 {
     let (local_read, local_write) = io::split(local);
     let (remote_read, remote_write) = io::split(remote);
     let codec = KafkaServerCodec::new();
+
+    let broker_store: Arc<RwLock<IndexMap<BrokerId, MetadataResponseBroker>>> =
+        Arc::new(RwLock::new(IndexMap::new()));
+
     tokio::select! {
         res = remote_to_local(remote_read, local_write, codec.clone()) => res,
-        res = local_to_remote(local_read, remote_write, codec) => res,
+        res = local_to_remote(local_read, remote_write, codec,proxy_state) => res,
     }
 }
 
-pub async fn remote_to_local<S1, S2>(remote_read: S1, mut local_write: S2, upstream_codec: KafkaServerCodec) -> Result<(), ErrorKind>
-    where
-        S1: AsyncRead + Unpin,
-        S2: AsyncWrite + Unpin,
+pub async fn remote_to_local<S1, S2>(
+    remote_read: S1,
+    mut local_write: S2,
+    upstream_codec: KafkaServerCodec,
+) -> Result<(), ErrorKind>
+where
+    S1: AsyncRead + Unpin,
+    S2: AsyncWrite + Unpin,
 {
     let codec = LengthDelimitedCodec::builder()
         .num_skip(0) // Do not strip frame header
@@ -191,7 +211,10 @@ pub async fn remote_to_local<S1, S2>(remote_read: S1, mut local_write: S2, upstr
 
             upstream_codec.inflight.insert(
                 correlation_id,
-                RequestKeyAndVersion { api_key: ApiKey::MetadataKey, api_version },
+                RequestKeyAndVersion {
+                    api_key: ApiKey::MetadataKey,
+                    api_version,
+                },
             );
         };
         local_write.write_all_buf(&mut bytes).await?;
@@ -199,7 +222,24 @@ pub async fn remote_to_local<S1, S2>(remote_read: S1, mut local_write: S2, upstr
 
     Ok(())
 }
-pub fn adapt_metadata(mut metadata: MetadataResponse) -> MetadataResponse {
+pub fn adapt_metadata(
+    mut metadata: MetadataResponse,
+    proxy_state: Arc<RwLock<ProxyState>>,
+) -> MetadataResponse {
+    let broker_store_2: IndexMap<BrokerId, MetadataResponseBroker> =
+        metadata.brokers.clone().into();
+
+    proxy_state
+        .write()
+        .unwrap()
+        .broker_store
+        .write()
+        .unwrap()
+        .extend(broker_store_2);
+    //todo : open a connection if needed
+    //get the port from the broker store
+    //apply port mapping to the broker list
+
     for broker in metadata.brokers.values_mut() {
         broker.host = StrBytes::from_str("bore.pub"); // FIXME
         broker.port = 19092; // FIXME
@@ -211,21 +251,25 @@ pub async fn local_to_remote<S1, S2>(
     local_read: S1,
     remote_write: S2,
     codec: KafkaServerCodec,
+    proxy_state: Arc<RwLock<ProxyState>>,
 ) -> Result<(), ErrorKind>
-    where
-        S1: AsyncRead + Unpin,
-        S2: AsyncWrite + Unpin,
+where
+    S1: AsyncRead + Unpin,
+    S2: AsyncWrite + Unpin,
 {
     let source = codec::FramedRead::new(local_read, codec);
     let sink = codec::FramedWrite::new(remote_write, KafkaServerCodec::new());
 
     source
         .map(|item| match item {
-            Ok(KafkaResponse::Metadata(version, header, response)) => {
-                Ok(KafkaResponse::Metadata(version, header, adapt_metadata(response)))
-            },
+            Ok(KafkaResponse::Metadata(version, header, response)) => Ok(KafkaResponse::Metadata(
+                version,
+                header,
+                adapt_metadata(response, proxy_state.clone()),
+            )),
             other => other,
         })
-        .forward(sink).await?;
+        .forward(sink)
+        .await?;
     Ok(())
 }

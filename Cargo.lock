@@ -93,6 +93,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "indexmap",
  "kafka-protocol",
  "lazy_static",
  "rstest",

@@ -1,6 +1,6 @@
 //! Client implementation for the `bore` service.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Context, Result};
 
@@ -10,10 +10,9 @@ use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
+use crate::connection_pool::ProxyState;
 use crate::kafka::kafka_proxy;
-use crate::shared::{
-    ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT,
-};
+use crate::shared::{ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT};
 
 /// State structure for the client.
 pub struct Client {
@@ -34,6 +33,9 @@ pub struct Client {
 
     /// Optional secret used to authenticate clients.
     auth: Option<Authenticator>,
+
+    /// connection pool
+    proxy_state: Arc<RwLock<ProxyState>>,
 }
 
 impl Client {
@@ -44,6 +46,7 @@ impl Client {
         to: &str,
         port: u16,
         secret: Option<&str>,
+        proxy_state: Arc<RwLock<ProxyState>>,
     ) -> Result<Self> {
         let mut stream = Delimited::new(connect_with_timeout(to, CONTROL_PORT).await?);
         let auth = secret.map(Authenticator::new);
@@ -71,6 +74,7 @@ impl Client {
             local_port,
             remote_port,
             auth,
+            proxy_state: proxy_state.clone(),
         })
     }
 
@@ -118,7 +122,7 @@ impl Client {
         let parts = remote_conn.into_parts();
         debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
         local_conn.write_all(&parts.read_buf).await?; // mostly of the cases, this will be empty
-        kafka_proxy(local_conn, parts.io).await?;
+        kafka_proxy(local_conn, parts.io, self.proxy_state.clone()).await?;
         Ok(())
     }
 }
