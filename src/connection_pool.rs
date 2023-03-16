@@ -48,24 +48,30 @@ impl ProxyState {
         self.auto_pointer.clone().expect("cannot be none")
     }
 
-    pub fn compute_added_brokers(
-        &mut self,
-        new_brokers: &IndexMap<BrokerId, MetadataResponseBroker>,
-    ) -> Vec<Url> {
-        let mut added_brokers = Vec::new();
+    pub fn insert_broker(&mut self, broker_id: BrokerId, broker: MetadataResponseBroker) {
         let mut broker_store = self.broker_store.write().unwrap();
+        broker_store.insert(broker_id, broker);
+    }
+
+    pub fn contains_broker(&self, broker_id: BrokerId) -> bool {
+        let broker_store = self.broker_store.read().unwrap();
+        broker_store.contains_key(&broker_id)
+    }
+
+    pub fn open_new_broker_connection_if_needed(
+        &mut self,
+        new_brokers: IndexMap<BrokerId, MetadataResponseBroker>,
+    ) {
         for (broker_id, broker) in new_brokers {
-            if !broker_store.contains_key(broker_id) {
-                broker_store.insert(*broker_id, broker.clone());
-                added_brokers.push(Url::new(
+            if !self.contains_broker(broker_id) {
+                self.insert_broker(broker_id, broker.clone());
+
+                self.add_connection(Url::new(
                     broker.host.to_string().clone(),
                     broker.port as u16,
                 ));
-
-                // self.add_connection(Url::new(broker.host.to_string().clone(), broker.port as u16));
             }
         }
-        added_brokers
     }
 
     fn connection_does_not_exist(&self, url: &Url) -> bool {
@@ -102,5 +108,7 @@ impl ProxyState {
         };
     }
 
-    fn stop() {}
+    pub fn get_remote_port(&self, url: &Url) -> Option<u16> {
+        self.connections.get(url).cloned()
+    }
 }

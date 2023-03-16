@@ -20,7 +20,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec;
 use tracing::debug;
 
-use crate::connection_pool::ProxyState;
+use crate::connection_pool::{ProxyState, Url};
 
 #[derive(Debug)]
 pub enum ErrorKind {
@@ -226,23 +226,19 @@ pub fn adapt_metadata(
     mut metadata: MetadataResponse,
     proxy_state: Arc<RwLock<ProxyState>>,
 ) -> MetadataResponse {
-    let broker_store_2: IndexMap<BrokerId, MetadataResponseBroker> =
-        metadata.brokers.clone().into();
+    let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
 
-    proxy_state
-        .write()
-        .unwrap()
-        .broker_store
-        .write()
-        .unwrap()
-        .extend(broker_store_2);
-    //todo : open a connection if needed
+    let mut lock = proxy_state.write().unwrap();
+
+    lock.open_new_broker_connection_if_needed(new_brokers);
     //get the port from the broker store
     //apply port mapping to the broker list
 
     for broker in metadata.brokers.values_mut() {
         broker.host = StrBytes::from_str("bore.pub"); // FIXME
-        broker.port = 19092; // FIXME
+        broker.port = lock
+            .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
+            .unwrap() as i32;
     }
     metadata
 }
