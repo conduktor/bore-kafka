@@ -1,10 +1,12 @@
 //! Client implementation for the `bore` service.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 
 use anyhow::{bail, Context, Result};
 
+use futures::future::{BoxFuture,FutureExt};
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
@@ -83,6 +85,13 @@ impl Client {
         self.remote_port
     }
 
+
+    pub fn listen_boxed(mut self) -> BoxFuture<'static, Result<()>>  {
+        async move {
+            self.listen().await
+        }.boxed()
+    }
+
     /// Start the client, listening for new connections.
     pub async fn listen(mut self) -> Result<()> {
         let mut conn = self.conn.take().unwrap();
@@ -93,11 +102,11 @@ impl Client {
                 Some(ServerMessage::Challenge(_)) => warn!("unexpected challenge"),
                 Some(ServerMessage::Heartbeat) => (),
                 Some(ServerMessage::Connection(id)) => {
-                    let this = Arc::clone(&this);
+                    let this = Arc::clone(&this);                    
                     tokio::spawn(
                         async move {
                             info!("new connection");
-                            match this.handle_connection(id).await {
+                            match Box::pin(this.handle_connection(id)).await {
                                 Ok(_) => info!("connection exited"),
                                 Err(err) => warn!(%err, "connection exited with error"),
                             }

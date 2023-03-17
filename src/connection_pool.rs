@@ -1,11 +1,11 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc},
 };
 
 use indexmap::IndexMap;
 use kafka_protocol::messages::{metadata_response::MetadataResponseBroker, BrokerId};
-use tokio::task::JoinHandle;
+use tokio::{task::JoinHandle, sync::RwLock};
 
 use crate::client::Client;
 
@@ -48,28 +48,28 @@ impl ProxyState {
         self.auto_pointer.clone().expect("cannot be none")
     }
 
-    pub fn insert_broker(&mut self, broker_id: BrokerId, broker: MetadataResponseBroker) {
-        let mut broker_store = self.broker_store.write().unwrap();
+    pub async fn insert_broker(&mut self, broker_id: BrokerId, broker: MetadataResponseBroker) {
+        let mut broker_store = self.broker_store.write().await;
         broker_store.insert(broker_id, broker);
     }
 
-    pub fn contains_broker(&self, broker_id: BrokerId) -> bool {
-        let broker_store = self.broker_store.read().unwrap();
+    pub async fn contains_broker(&self, broker_id: BrokerId) -> bool {
+        let broker_store = self.broker_store.read().await;
         broker_store.contains_key(&broker_id)
     }
 
-    pub fn open_new_broker_connection_if_needed(
+    pub async fn open_new_broker_connection_if_needed(
         &mut self,
         new_brokers: IndexMap<BrokerId, MetadataResponseBroker>,
     ) {
         for (broker_id, broker) in new_brokers {
-            if !self.contains_broker(broker_id) {
+            if !self.contains_broker(broker_id).await {
                 self.insert_broker(broker_id, broker.clone());
 
                 self.add_connection(Url::new(
                     broker.host.to_string().clone(),
                     broker.port as u16,
-                ));
+                )).await;
             }
         }
     }
@@ -85,7 +85,7 @@ impl ProxyState {
             let at = self.get_auto_pointer();
 
             //port = 0 => to force random port
-            let client = Client::new(
+            let client =  Client::new(
                 &local_url_to_relay.host.clone(),
                 local_url_to_relay.port.clone(),
                 &CONDUKTOR_BORE_SERVER,
@@ -98,11 +98,10 @@ impl ProxyState {
 
             let remote_port = client.remote_port.clone();
 
-            tokio::spawn(async move {
+            tokio::spawn( 
                 // Process each socket concurrently.
-
-                client.listen().await.unwrap();
-            });
+                client.listen_boxed()
+            );
 
             self.connections.insert(url, remote_port);
         };

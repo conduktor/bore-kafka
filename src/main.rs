@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 
 use anyhow::Result;
 use bore_cli::{
@@ -7,6 +7,7 @@ use bore_cli::{
     server::Server,
 };
 use clap::{Parser, Subcommand};
+use tokio::sync::RwLock;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
