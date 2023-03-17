@@ -64,7 +64,7 @@ impl ProxyState {
     ) {
         for (broker_id, broker) in new_brokers {
             if !self.contains_broker(broker_id).await {
-                self.insert_broker(broker_id, broker.clone());
+                self.insert_broker(broker_id, broker.clone()).await;
 
                 self.add_connection(Url::new(
                     broker.host.to_string().clone(),

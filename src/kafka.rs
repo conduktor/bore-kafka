@@ -17,6 +17,7 @@ use kafka_protocol::protocol::{
 };
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio_util::codec;
 use tracing::{debug, info};
@@ -230,7 +231,7 @@ pub fn adapt_metadata(
 ) -> MetadataResponse {
     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
 
-    let mut lock = proxy_state.blocking_write();
+    //let mut lock = proxy_state.blocking_write();
 
     // let inner_state  = proxy_state.clone();
 
@@ -239,22 +240,27 @@ pub fn adapt_metadata(
     //    let mut inner_lock = inner_state.write().unwrap();
     //    futures::executor::block_on(inner_lock.open_new_broker_connection_if_needed(new_brokers))
     //});
-    
-    futures::executor::block_on(lock.open_new_broker_connection_if_needed(new_brokers));
 
-    let mut lock = proxy_state.blocking_write();
+    Handle::current().block_on(tokio::spawn(async move {
+        let mut lock = proxy_state.write().await;
+        lock.open_new_broker_connection_if_needed(new_brokers).await;
+        info!("mapping: {:?}", lock.connections);
+
+        for broker in metadata.brokers.values_mut() {
+            info!("broker: {:?}", broker);
+            broker.host = StrBytes::from_str("bore.pub"); // FIXME
+            broker.port = lock
+                .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
+                .unwrap() as i32;
+        }
+        metadata
+
+    })).unwrap()
+    //futures::executor::block_on(lock.open_new_broker_connection_if_needed(new_brokers));
+
+
     //get the port from the broker store
     //apply port mapping to the broker list
-    info!("mapping: {:?}", lock.connections);
-
-    for broker in metadata.brokers.values_mut() {
-        info!("broker: {:?}", broker);
-        broker.host = StrBytes::from_str("bore.pub"); // FIXME
-        broker.port = lock
-            .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
-            .unwrap() as i32;
-    }
-    metadata
 }
 
 // pub async fn adapt_metadata_async(
