@@ -66,11 +66,11 @@ async fn run(command: Command) -> Result<()> {
             // let auto_pointer = Arc::new(relay);
             proxy_state
                 .write()
-                .unwrap()
+                .await
                 .set_auto_pointer(proxy_state.clone());
             proxy_state
                 .write()
-                .unwrap()
+                .await
                 .add_connection(Url::new(local_host, local_port))
                 .await;
 

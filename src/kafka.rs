@@ -224,49 +224,25 @@ where
     Ok(())
 }
 
-// pub fn adapt_metadata(
-//     mut metadata: MetadataResponse,
-//     proxy_state: Arc<RwLock<ProxyState>>,
-// ) -> MetadataResponse {
-//     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
-
-//     let mut lock = proxy_state.write().unwrap();
-
-//     let inner_state  = proxy_state.clone();
-
-//     // lock.open_new_broker_connection_if_needed(new_brokers).await;
-//     //tokio::task::spawn_blocking(move || {
-//     //    let mut inner_lock = inner_state.write().unwrap();
-//     //    futures::executor::block_on(inner_lock.open_new_broker_connection_if_needed(new_brokers))
-//     //});
-    
-//     futures::executor::block_on(lock.open_new_broker_connection_if_needed(new_brokers));
-
-//     let mut lock = proxy_state.write().unwrap();
-//     //get the port from the broker store
-//     //apply port mapping to the broker list
-//     info!("mapping: {:?}", lock.connections);
-
-//     for broker in metadata.brokers.values_mut() {
-//         info!("broker: {:?}", broker);
-//         broker.host = StrBytes::from_str("bore.pub"); // FIXME
-//         broker.port = lock
-//             .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
-//             .unwrap() as i32;
-//     }
-//     metadata
-// }
-
-pub async fn adapt_metadata_async(
+pub fn adapt_metadata(
     mut metadata: MetadataResponse,
     proxy_state: Arc<RwLock<ProxyState>>,
 ) -> MetadataResponse {
     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
 
-    
-        let mut lock = proxy_state.write().await;
-        lock.open_new_broker_connection_if_needed(new_brokers).await;
+    let mut lock = proxy_state.blocking_write();
 
+    // let inner_state  = proxy_state.clone();
+
+    // lock.open_new_broker_connection_if_needed(new_brokers).await;
+    //tokio::task::spawn_blocking(move || {
+    //    let mut inner_lock = inner_state.write().unwrap();
+    //    futures::executor::block_on(inner_lock.open_new_broker_connection_if_needed(new_brokers))
+    //});
+    
+    futures::executor::block_on(lock.open_new_broker_connection_if_needed(new_brokers));
+
+    let mut lock = proxy_state.blocking_write();
     //get the port from the broker store
     //apply port mapping to the broker list
     info!("mapping: {:?}", lock.connections);
@@ -280,6 +256,30 @@ pub async fn adapt_metadata_async(
     }
     metadata
 }
+
+// pub async fn adapt_metadata_async(
+//     mut metadata: MetadataResponse,
+//     proxy_state: Arc<RwLock<ProxyState>>,
+// ) -> MetadataResponse {
+//     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
+//
+//
+//         let mut lock = proxy_state.write().await;
+//         lock.open_new_broker_connection_if_needed(new_brokers).await;
+//
+//     //get the port from the broker store
+//     //apply port mapping to the broker list
+//     info!("mapping: {:?}", lock.connections);
+//
+//     for broker in metadata.brokers.values_mut() {
+//         info!("broker: {:?}", broker);
+//         broker.host = StrBytes::from_str("bore.pub"); // FIXME
+//         broker.port = lock
+//             .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
+//             .unwrap() as i32;
+//     }
+//     metadata
+// }
 
 
 pub async fn local_to_remote<S1, S2>(
@@ -296,11 +296,11 @@ where
     let sink = codec::FramedWrite::new(remote_write, KafkaServerCodec::new());
 
     source
-        .then(|item| async { match item {
+        .map(|item| { match item {
             Ok(KafkaResponse::Metadata(version, header, response)) => Ok(KafkaResponse::Metadata(
                 version,
                 header,
-                adapt_metadata_async(response, proxy_state.clone()).await,
+                adapt_metadata(response, proxy_state.clone()),
             )),
             other => other,
         }})
