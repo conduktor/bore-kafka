@@ -1,18 +1,22 @@
 //! Client implementation for the `bore` service.
 
+use std::collections::HashMap;
 use std::sync::{Arc};
 
 use anyhow::{bail, Context, Result};
 
-use futures::future::{BoxFuture,FutureExt};
+use indexmap::IndexMap;
+use kafka_protocol::messages::BrokerId;
+use kafka_protocol::messages::metadata_response::MetadataResponseBroker;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::{net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
-use crate::connection_pool::ProxyState;
+use crate::connection_pool::{ProxyState, Url};
 use crate::kafka::kafka_proxy;
 use crate::shared::{ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT};
 
@@ -36,8 +40,8 @@ pub struct Client {
     /// Optional secret used to authenticate clients.
     auth: Option<Authenticator>,
 
-    /// connection pool
-    proxy_state: Arc<RwLock<ProxyState>>,
+   pub tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+   pub rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
 }
 
 impl Client {
@@ -48,7 +52,8 @@ impl Client {
         to: &str,
         port: u16,
         secret: Option<&str>,
-        proxy_state: Arc<RwLock<ProxyState>>,
+        tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+        rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
     ) -> Result<Self> {
         let mut stream = Delimited::new(connect_with_timeout(to, CONTROL_PORT).await?);
         let auth = secret.map(Authenticator::new);
@@ -76,7 +81,8 @@ impl Client {
             local_port,
             remote_port,
             auth,
-            proxy_state: proxy_state.clone(),
+            tx_metadata: tx_metadata.clone(),
+            rx_mapping: rx_mapping,
         })
     }
 
@@ -86,11 +92,6 @@ impl Client {
     }
 
 
-    pub fn listen_boxed(mut self) -> BoxFuture<'static, Result<()>>  {
-        async move {
-            self.listen().await
-        }.boxed()
-    }
 
     /// Start the client, listening for new connections.
     pub async fn listen(mut self) -> Result<()> {
@@ -102,11 +103,11 @@ impl Client {
                 Some(ServerMessage::Challenge(_)) => warn!("unexpected challenge"),
                 Some(ServerMessage::Heartbeat) => (),
                 Some(ServerMessage::Connection(id)) => {
-                    let this = Arc::clone(&this);                    
+                    let this = Arc::clone(&this);
                     tokio::spawn(
                         async move {
                             info!("new connection");
-                            match Box::pin(this.handle_connection(id)).await {
+                            match this.handle_connection(id).await {
                                 Ok(_) => info!("connection exited"),
                                 Err(err) => warn!(%err, "connection exited with error"),
                             }
@@ -120,6 +121,7 @@ impl Client {
         }
     }
 
+
     async fn handle_connection(&self, id: Uuid) -> Result<()> {
         let mut remote_conn =
             Delimited::new(connect_with_timeout(&self.to[..], CONTROL_PORT).await?);
@@ -131,7 +133,7 @@ impl Client {
         let parts = remote_conn.into_parts();
         debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
         local_conn.write_all(&parts.read_buf).await?; // mostly of the cases, this will be empty
-        kafka_proxy(local_conn, parts.io, self.proxy_state.clone()).await?;
+        kafka_proxy(local_conn, parts.io, self.tx_metadata.clone(),self.rx_mapping.clone()).await?;
         Ok(())
     }
 }

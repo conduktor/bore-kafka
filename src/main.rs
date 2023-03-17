@@ -8,6 +8,7 @@ use bore_cli::{
 };
 use clap::{Parser, Subcommand};
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
@@ -62,7 +63,11 @@ async fn run(command: Command) -> Result<()> {
             port,
             secret,
         } => {
-            let mut proxy_state = Arc::new(RwLock::new(ProxyState::new(secret)));
+
+            let (tx_metadata, mut rx_metadata): (Sender<IndexMap<BrokerId, MetadataResponseBroker>>, Receiver<IndexMap<BrokerId, MetadataResponseBroker>>) = mpsc::channel();
+            let (tx_mapping, mut rx_mapping): (Sender<HashMap<Url, u16>>, Receiver<HashMap<Url, u16>>) = mpsc::channel();
+
+            let mut proxy_state = Arc::new(RwLock::new(ProxyState::new(secret,rx_metadata,tx_mapping)));
             // let auto_pointer = Arc::new(relay);
             proxy_state
                 .write()
@@ -74,7 +79,9 @@ async fn run(command: Command) -> Result<()> {
                 .add_connection(Url::new(local_host, local_port))
                 .await;
 
-            return_infinite_future().await;
+            // return_infinite_future().await;
+
+            proxy_state.start().await;
         }
         Command::Server { min_port, secret } => {
             Server::new(min_port, secret.as_deref()).listen().await?;

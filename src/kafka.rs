@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
@@ -18,6 +19,7 @@ use kafka_protocol::protocol::{
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::{Sender, Receiver};
 use tokio_util::codec;
 use tracing::{debug, info};
 
@@ -166,7 +168,8 @@ impl codec::Encoder<KafkaResponse> for KafkaServerCodec {
 pub async fn kafka_proxy<S1, S2>(
     local: S1,
     remote: S2,
-    proxy_state: Arc<RwLock<ProxyState>>,
+    tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+    rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
 ) -> Result<(), ErrorKind>
 where
     S1: AsyncRead + AsyncWrite + Unpin,
@@ -181,7 +184,7 @@ where
 
     tokio::select! {
         res = remote_to_local(remote_read, local_write, codec.clone()) => res,
-        res = local_to_remote(local_read, remote_write, codec,proxy_state) => res,
+        res = local_to_remote(local_read, remote_write, codec,tx_metadata,rx_mapping) => res,
     }
 }
 
@@ -224,59 +227,25 @@ where
     Ok(())
 }
 
-// pub fn adapt_metadata(
-//     mut metadata: MetadataResponse,
-//     proxy_state: Arc<RwLock<ProxyState>>,
-// ) -> MetadataResponse {
-//     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
-
-//     let mut lock = proxy_state.write().unwrap();
-
-//     let inner_state  = proxy_state.clone();
-
-//     // lock.open_new_broker_connection_if_needed(new_brokers).await;
-//     //tokio::task::spawn_blocking(move || {
-//     //    let mut inner_lock = inner_state.write().unwrap();
-//     //    futures::executor::block_on(inner_lock.open_new_broker_connection_if_needed(new_brokers))
-//     //});
-    
-//     futures::executor::block_on(lock.open_new_broker_connection_if_needed(new_brokers));
-
-//     let mut lock = proxy_state.write().unwrap();
-//     //get the port from the broker store
-//     //apply port mapping to the broker list
-//     info!("mapping: {:?}", lock.connections);
-
-//     for broker in metadata.brokers.values_mut() {
-//         info!("broker: {:?}", broker);
-//         broker.host = StrBytes::from_str("bore.pub"); // FIXME
-//         broker.port = lock
-//             .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
-//             .unwrap() as i32;
-//     }
-//     metadata
-// }
-
-pub async fn adapt_metadata_async(
+pub async fn adapt_metadata(
     mut metadata: MetadataResponse,
-    proxy_state: Arc<RwLock<ProxyState>>,
+    tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+    rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
 ) -> MetadataResponse {
     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
 
-    
-        let mut lock = proxy_state.write().await;
-        lock.open_new_broker_connection_if_needed(new_brokers).await;
+    tx_metadata.send(new_brokers).await;
 
     //get the port from the broker store
     //apply port mapping to the broker list
-    info!("mapping: {:?}", lock.connections);
 
     for broker in metadata.brokers.values_mut() {
         info!("broker: {:?}", broker);
         broker.host = StrBytes::from_str("bore.pub"); // FIXME
-        broker.port = lock
-            .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
-            .unwrap() as i32;
+        broker.port = 0 //todo
+        // lock
+        //     .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
+        //     .unwrap() as i32;
     }
     metadata
 }
@@ -286,7 +255,8 @@ pub async fn local_to_remote<S1, S2>(
     local_read: S1,
     remote_write: S2,
     codec: KafkaServerCodec,
-    proxy_state: Arc<RwLock<ProxyState>>,
+    tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+    rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
 ) -> Result<(), ErrorKind>
 where
     S1: AsyncRead + Unpin,
@@ -294,13 +264,12 @@ where
 {
     let source = codec::FramedRead::new(local_read, codec);
     let sink = codec::FramedWrite::new(remote_write, KafkaServerCodec::new());
-
     source
         .then(|item| async { match item {
             Ok(KafkaResponse::Metadata(version, header, response)) => Ok(KafkaResponse::Metadata(
                 version,
                 header,
-                adapt_metadata_async(response, proxy_state.clone()).await,
+                adapt_metadata(response, tx_metadata.clone(), rx_mapping.clone()).await,
             )),
             other => other,
         }})

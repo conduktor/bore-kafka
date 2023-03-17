@@ -5,7 +5,8 @@ use std::{
 
 use indexmap::IndexMap;
 use kafka_protocol::messages::{metadata_response::MetadataResponseBroker, BrokerId};
-use tokio::{task::JoinHandle, sync::RwLock};
+use tokio::{task::JoinHandle, sync::{RwLock, mpsc::{Sender, Receiver}}};
+use tracing::info;
 
 use crate::client::Client;
 
@@ -28,15 +29,30 @@ pub struct ProxyState {
     secret: Option<String>,
     pub auto_pointer: Option<Arc<RwLock<ProxyState>>>,
     pub broker_store: Arc<RwLock<IndexMap<BrokerId, MetadataResponseBroker>>>,
+    pub rx_metadata: Arc<RwLock<Receiver<IndexMap<BrokerId, MetadataResponseBroker>>>>,
+    pub tx_mapping: Sender<HashMap<Url, u16>>,
+
+   pub tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+   pub rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
 }
 
 impl ProxyState {
-    pub fn new(secret: Option<String>) -> ProxyState {
+    pub fn new(secret: Option<String>,
+        rx_metadata: Arc<RwLock<Receiver<IndexMap<BrokerId, MetadataResponseBroker>>>>,
+        tx_mapping: Sender<HashMap<Url, u16>>,
+        tx_metadata: Sender<IndexMap<BrokerId, MetadataResponseBroker>>,
+        rx_mapping: Arc<RwLock<Receiver<HashMap<Url, u16>>>>,
+    ) -> ProxyState {
         ProxyState {
             connections: HashMap::new(),
             secret: secret,
             auto_pointer: None,
             broker_store: Arc::new(RwLock::new(IndexMap::new())),
+            rx_metadata,
+            tx_mapping,
+            tx_metadata,
+            rx_mapping
+
         }
     }
 
@@ -82,7 +98,6 @@ impl ProxyState {
         if self.connection_does_not_exist(&url) {
             let local_url_to_relay = url.clone();
             let s = self.secret.clone();
-            let at = self.get_auto_pointer();
 
             //port = 0 => to force random port
             let client =  Client::new(
@@ -91,7 +106,8 @@ impl ProxyState {
                 &CONDUKTOR_BORE_SERVER,
                 0,
                 s.as_deref(),
-                at,
+                self.tx_metadata.clone(),
+                self.rx_mapping.clone()
             )
             .await
             .unwrap();
@@ -100,7 +116,7 @@ impl ProxyState {
 
             tokio::spawn( 
                 // Process each socket concurrently.
-                client.listen_boxed()
+                client.listen()
             );
 
             self.connections.insert(url, remote_port);
@@ -109,5 +125,14 @@ impl ProxyState {
 
     pub fn get_remote_port(&self, url: &Url) -> Option<u16> {
         self.connections.get(url).cloned()
+    }
+
+    pub async fn start(&mut self){
+       let tmp =  self.rx_metadata.clone();
+       let mut local_rx=tmp.write().await;
+            while let Some(message) = local_rx.recv().await {
+            info!("new brokers: {:?}", message);
+            self.open_new_broker_connection_if_needed(message).await;
+        }
     }
 }
