@@ -8,6 +8,7 @@ use bore_cli::{
 };
 use clap::{Parser, Subcommand};
 use std::sync::RwLock;
+use bore_cli::connection_pool::add_connection;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
@@ -62,18 +63,8 @@ async fn run(command: Command) -> Result<()> {
             port,
             secret,
         } => {
-            let mut proxy_state = Arc::new(RwLock::new(ProxyState::new(secret)));
-            // let auto_pointer = Arc::new(relay);
-            proxy_state
-                .write()
-                .await
-                .set_auto_pointer(proxy_state.clone());
-            proxy_state
-                .write()
-                .await
-                .add_connection(Url::new(local_host, local_port))
-                .await;
-
+            let proxy_state = Arc::new(RwLock::new(ProxyState::new(secret)));
+            add_connection(&proxy_state, Url::new(local_host, local_port)).await;
             return_infinite_future().await;
         }
         Command::Server { min_port, secret } => {

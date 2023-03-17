@@ -304,14 +304,16 @@ where
     let sink = codec::FramedWrite::new(remote_write, KafkaServerCodec::new());
 
     source
-        .then(|item| async { match item {
+        .then(|item| {
+            let proxy_state = Arc::clone(&proxy_state);
+            async move { match item {
             Ok(KafkaResponse::Metadata(version, header, response)) => Ok(KafkaResponse::Metadata(
                 version,
                 header,
-                adapt_metadata_async(response, proxy_state.clone()).await,
+                adapt_metadata_async(response, proxy_state).await,
             )),
             other => other,
-        }})
+        }}})
         .forward(sink)
         .await?;
     Ok(())
