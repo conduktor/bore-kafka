@@ -246,11 +246,15 @@ pub fn adapt_metadata(
         lock.open_new_broker_connection_if_needed(new_brokers).await;
         info!("mapping: {:?}", lock.connections);
 
+
         for broker in metadata.brokers.values_mut() {
             info!("broker: {:?}", broker);
+            let url = Url::new(broker.host.to_string(), broker.port as u16);
+            debug!("url: {:?}", url);
+
+
             broker.host = StrBytes::from_str("bore.pub"); // FIXME
-            broker.port = lock
-                .get_remote_port(&Url::new(broker.host.to_string(), broker.port as u16))
+            broker.port = lock.get_remote_port(&url)
                 .unwrap() as i32;
         }
         metadata
