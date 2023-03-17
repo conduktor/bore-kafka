@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 
 use futures::future::{BoxFuture,FutureExt};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
@@ -106,7 +106,7 @@ impl Client {
                     tokio::spawn(
                         async move {
                             info!("new connection");
-                            match Box::pin(this.handle_connection(id)).await {
+                            match this.handle_connection(id).await {
                                 Ok(_) => info!("connection exited"),
                                 Err(err) => warn!(%err, "connection exited with error"),
                             }

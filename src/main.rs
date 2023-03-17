@@ -7,7 +7,7 @@ use bore_cli::{
     server::Server,
 };
 use clap::{Parser, Subcommand};
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
