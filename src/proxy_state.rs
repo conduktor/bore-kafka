@@ -18,6 +18,12 @@ pub struct Url {
     pub port: u16,
 }
 
+impl From<MetadataResponseBroker> for Url {
+    fn from(broker: MetadataResponseBroker) -> Self {
+        Url::new(broker.host.to_string(), broker.port as u16)
+    }
+}
+
 impl Url {
     /// Create a new Url
     pub fn new(host: String, port: u16) -> Url {
@@ -30,9 +36,6 @@ pub struct ProxyState {
     /// mapping between local url and remote port
     pub connections: HashMap<Url, u16>,
     secret: Option<String>,
-    /// mapping between broker id and broker metadata
-    /// used to detect new brokers and open new connections if needed
-    pub broker_store: IndexMap<BrokerId, MetadataResponseBroker>,
 }
 
 impl ProxyState {
@@ -41,17 +44,16 @@ impl ProxyState {
         ProxyState {
             connections: HashMap::new(),
             secret,
-            broker_store: IndexMap::new(),
         }
     }
     /// Insert a new broker in the ref list
-    pub fn insert_broker(&mut self, broker_id: BrokerId, broker: MetadataResponseBroker) {
-        self.broker_store.insert(broker_id, broker);
+    pub fn insert_broker(&mut self, broker_local_url: Url) {
+        self.connections.insert(broker_local_url, 0);
     }
 
     /// Check if a broker is already in the ref list
-    pub fn contains_broker(&self, broker_id: BrokerId) -> bool {
-        self.broker_store.contains_key(&broker_id)
+    pub fn contains_broker(&self, broker_local_url: Url) -> bool {
+        self.connections.contains_key(&broker_local_url)
     }
 
     /// Get the remote port for a given local url
@@ -72,17 +74,17 @@ pub async fn open_new_broker_connection_if_needed(
     let mut new = vec![];
 
     {
-        let mut lock = state.write().unwrap();
-        for (broker_id, broker) in new_brokers {
-            if !lock.contains_broker(broker_id) {
-                lock.insert_broker(broker_id, broker.clone());
-                new.push(broker);
+        let lock = state.write().unwrap();
+        for (_, broker) in new_brokers {
+            let local_url = Url::from(broker);
+            if !lock.contains_broker(local_url.clone()) {
+                new.push(local_url);
             }
         }
     }
-    for broker in new {
-        let url = Url::new(broker.host.to_string(), broker.port as u16);
-        add_connection(state, url).await;
+
+    for broker_local_url in new {
+        add_connection(state, broker_local_url.clone()).await;
     }
 }
 

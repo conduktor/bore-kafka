@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use conduktor_kafka_proxy::connection_pool::add_connection;
+use conduktor_kafka_proxy::proxy_state::add_connection;
 use conduktor_kafka_proxy::{
-    connection_pool::{ProxyState, Url},
+    proxy_state::{ProxyState, Url},
     server::Server,
 };
 use std::sync::RwLock;
