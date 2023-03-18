@@ -5,15 +5,10 @@ use conduktor_kafka_proxy::proxy_state::add_connection;
 use conduktor_kafka_proxy::proxy_state::ProxyState;
 use conduktor_kafka_proxy::utils::parse_bootstrap_server;
 use tauri::SystemTray;
+use tauri::SystemTrayEvent;
 use tauri::{CustomMenuItem, Menu, MenuItem, Submenu, SystemTrayMenu, SystemTrayMenuItem};
 
 use std::sync::{Arc, RwLock};
-
-// Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[tokio::main]
 async fn main() {
@@ -60,6 +55,33 @@ async fn start_tauri() {
         })
         .menu(menu)
         .system_tray(system_tray)
+        .on_menu_event(|event| match event.menu_item_id() {
+            "quit" => {
+                std::process::exit(0);
+            }
+            "close" => {
+                event.window().close().unwrap();
+            }
+            _ => {}
+        })
+        .on_menu_event(|event| match event.menu_item_id() {
+            "quit" => {
+                std::process::exit(0);
+            }
+            "close" => {
+                event.window().close().unwrap();
+            }
+            _ => {}
+        })
+        .on_system_tray_event(|app, event| match event {
+            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                "quit" => {
+                    std::process::exit(0);
+                }
+                _ => {}
+            }
+            _ => {}
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application")
 }
