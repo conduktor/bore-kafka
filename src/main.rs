@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bore_cli::connection_pool::add_connection;
-use bore_cli::{
+use clap::{Parser, Subcommand};
+use conduktor_kafka_proxy::connection_pool::add_connection;
+use conduktor_kafka_proxy::{
     connection_pool::{ProxyState, Url},
     server::Server,
 };
-use clap::{Parser, Subcommand};
 use std::sync::RwLock;
 
 #[derive(Parser, Debug)]
@@ -19,7 +19,7 @@ struct Args {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Starts a local LocalProxy to the remote server.
-    KafkaProxy {
+    Start {
         /// The local host to expose.
         #[clap(
             short,
@@ -56,7 +56,7 @@ fn parse_bootstrap_server(bootstrap_server: String) -> Url {
 #[tokio::main]
 async fn run(command: Command) -> Result<()> {
     match command {
-        Command::KafkaProxy {
+        Command::Start {
             bootstrap_server,
             secret,
         } => {

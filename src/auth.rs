@@ -28,7 +28,7 @@ impl Authenticator {
     /// Validate a reply to a challenge.
     ///
     /// ```
-    /// use bore_cli::auth::Authenticator;
+    /// use conduktor_kafka_proxy::auth::Authenticator;
     /// use uuid::Uuid;
     ///
     /// let auth = Authenticator::new("secret");

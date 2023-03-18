@@ -9,24 +9,25 @@ This will expose your local port and all the others retruned by kafka at `localh
 
 ## Detailed Usage
 
-This section describes detailed usage for the `bore` CLI command.
+This section describes detailed usage for the `conduktor-kafka-proxy` CLI command.
 
 ### Local Forwarding
 
 ```shell
-cargo run kafka-proxy --bootstrap-server localhost:9092
+cargo run start --bootstrap-server localhost:9092
 ```
 The full options are shown below.
 
 ```shell
 Starts a local LocalProxy to the remote server
 
-Usage: bore kafka-proxy [OPTIONS]
+Usage: conduktor-kafka-proxy start [OPTIONS]
 
 Options:
   -b, --bootstrap-server <BOOTSTRAP_SERVER>  The local host to expose [default: localhost:9092]
   -s, --secret <SECRET>                      Optional secret for authentication [env: BORE_SECRET]
-  -h, --help                                 Print help information
+  -h, --help                                 Print help
+
 ```
 
 ### Self-Hosting
