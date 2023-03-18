@@ -5,6 +5,7 @@ use conduktor_kafka_proxy::proxy_state::add_connection;
 use conduktor_kafka_proxy::utils::parse_bootstrap_server;
 use conduktor_kafka_proxy::{
     proxy_state::{ProxyState}};
+use tauri::{CustomMenuItem, Submenu, Menu, MenuItem};
 
 use std::sync::{Arc, RwLock};
 
@@ -26,12 +27,20 @@ async fn main() {
 
 
 async fn  start_tauri() {
+    let quit = CustomMenuItem::new("quit".to_string(), "Quit");
+    let close = CustomMenuItem::new("close".to_string(), "Close");
+    let submenu = Submenu::new("Menu", Menu::new().add_item(quit).add_item(close));
+    let menu = Menu::new()
+      .add_native_item(MenuItem::Copy)
+      .add_submenu(submenu);
+
     tauri::Builder::default()
     .setup(|app| {
              let window = tauri::WindowBuilder::new(app, "label",  tauri::WindowUrl::App("https://conduktor.conduktor.app/".into()),)
             .build()?;
         Ok(())
     })
+    .menu(menu)
     .run(tauri::generate_context!())
     .expect("error while running tauri application")
 }
