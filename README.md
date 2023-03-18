@@ -1,47 +1,11 @@
 # bore
-
-[![Build status](https://img.shields.io/github/actions/workflow/status/ekzhang/bore/ci.yml)](https://github.com/ekzhang/bore/actions)
-[![Crates.io](https://img.shields.io/crates/v/bore-cli.svg)](https://crates.io/crates/bore-cli)
-
-A modern, simple TCP tunnel in Rust that exposes local ports to a remote server, bypassing standard NAT connection firewalls. **That's all it does: no more, and no less.**
-
-![Video demo](https://i.imgur.com/vDeGsmx.gif)
-
 ```shell
-# Installation (requires Rust, see alternatives below)
-cargo install bore-cli
-
-# On your local machine
-bore local 8000 --to bore.pub
+cargo run kafka-proxy --bootstrap-server localhost:9092
 ```
 
-This will expose your local port at `localhost:8000` to the public internet at `bore.pub:<PORT>`, where the port number is assigned randomly.
+This will expose your local port and all the others retruned by kafka at `localhost:9092` to the public internet at `bore.pub:<PORT>`, where the port number is assigned randomly.
 
-Similar to [localtunnel](https://github.com/localtunnel/localtunnel) and [ngrok](https://ngrok.io/), except `bore` is intended to be a highly efficient, unopinionated tool for forwarding TCP traffic that is simple to install and easy to self-host, with no frills attached.
 
-(`bore` totals less than 400 lines of safe, async Rust code and is trivial to set up — just run a single binary for the client and server.)
-
-## Installation
-
-If you're on macOS, `bore` is packaged as a Homebrew formula.
-
-```shell
-brew install ekzhang/bore/bore
-```
-
-Otherwise, the easiest way to install bore is from prebuilt binaries. These are available on the [releases page](https://github.com/ekzhang/bore/releases) for macOS, Windows, and Linux. Just unzip the appropriate file for your platform and move the `bore` executable into a folder on your PATH.
-
-You also can build `bore` from source using [Cargo](https://doc.rust-lang.org/cargo/), the Rust package manager. This command installs the `bore` binary at a user-accessible path.
-
-```shell
-cargo install bore-cli
-```
-
-We also publish versioned Docker images for each release. The image is built for an AMD 64-bit architecture. They're tagged with the specific version and allow you to run the statically-linked `bore` binary from a minimal "scratch" container.
-
-```shell
-docker run -it --init --rm --network host ekzhang/bore <ARGS>
-```
 
 ## Detailed Usage
 
@@ -49,30 +13,20 @@ This section describes detailed usage for the `bore` CLI command.
 
 ### Local Forwarding
 
-You can forward a port on your local machine by using the `bore local` command. This takes a positional argument, the local port to forward, as well as a mandatory `--to` option, which specifies the address of the remote server.
-
 ```shell
-bore local 5000 --to bore.pub
+cargo run kafka-proxy --bootstrap-server localhost:9092
 ```
-
-You can optionally pass in a `--port` option to pick a specific port on the remote to expose, although the command will fail if this port is not available. Also, passing `--local-host` allows you to expose a different host on your local area network besides the loopback address `localhost`.
-
 The full options are shown below.
 
 ```shell
-Starts a local proxy to the remote server
+Starts a local LocalProxy to the remote server
 
-Usage: bore local [OPTIONS] --to <TO> <LOCAL_PORT>
-
-Arguments:
-  <LOCAL_PORT>  The local port to expose
+Usage: bore kafka-proxy [OPTIONS]
 
 Options:
-  -l, --local-host <HOST>  The local host to expose [default: localhost]
-  -t, --to <TO>            Address of the remote server to expose local ports to [env: BORE_SERVER=]
-  -p, --port <PORT>        Optional port on the remote server to select [default: 0]
-  -s, --secret <SECRET>    Optional secret for authentication [env: BORE_SECRET]
-  -h, --help               Print help information
+  -b, --bootstrap-server <BOOTSTRAP_SERVER>  The local host to expose [default: localhost:9092]
+  -s, --secret <SECRET>                      Optional secret for authentication [env: BORE_SECRET]
+  -h, --help                                 Print help information
 ```
 
 ### Self-Hosting

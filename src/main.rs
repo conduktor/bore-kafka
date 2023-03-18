@@ -1,14 +1,13 @@
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use anyhow::Result;
+use bore_cli::connection_pool::add_connection;
 use bore_cli::{
-    client::Client,
     connection_pool::{ProxyState, Url},
     server::Server,
 };
 use clap::{Parser, Subcommand};
 use std::sync::RwLock;
-use bore_cli::connection_pool::add_connection;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
@@ -19,22 +18,16 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Starts a local proxy to the remote server.
-    Local {
-        /// The local port to expose.
-        local_port: u16,
-
+    /// Starts a local LocalProxy to the remote server.
+    KafkaProxy {
         /// The local host to expose.
-        #[clap(short, long, value_name = "HOST", default_value = "localhost")]
-        local_host: String,
-
-        /// Address of the remote server to expose local ports to.
-        #[clap(short, long, env = "BORE_SERVER")]
-        to: String,
-
-        /// Optional port on the remote server to select.
-        #[clap(short, long, default_value_t = 0)]
-        port: u16,
+        #[clap(
+            short,
+            long,
+            value_name = "BOOTSTRAP_SERVER",
+            default_value = "localhost:9092"
+        )]
+        bootstrap_server: String,
 
         /// Optional secret for authentication.
         #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
@@ -53,18 +46,22 @@ enum Command {
     },
 }
 
+fn parse_bootstrap_server(bootstrap_server: String) -> Url {
+    let mut split = bootstrap_server.split(":");
+    let host = split.next().unwrap();
+    let port = split.next().unwrap().parse().unwrap();
+    Url::new(host.to_string(), port)
+}
+
 #[tokio::main]
 async fn run(command: Command) -> Result<()> {
     match command {
-        Command::Local {
-            local_host,
-            local_port,
-            to,
-            port,
+        Command::KafkaProxy {
+            bootstrap_server,
             secret,
         } => {
             let proxy_state = Arc::new(RwLock::new(ProxyState::new(secret)));
-            add_connection(&proxy_state, Url::new(local_host, local_port)).await;
+            add_connection(&proxy_state, parse_bootstrap_server(bootstrap_server)).await;
             return_infinite_future().await;
         }
         Command::Server { min_port, secret } => {

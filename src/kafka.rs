@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use bytes::Buf;
 use bytes::{BufMut, BytesMut};
@@ -13,23 +13,30 @@ use kafka_protocol::messages::metadata_response::MetadataResponseBroker;
 use kafka_protocol::messages::*;
 use kafka_protocol::protocol::buf::{ByteBuf, NotEnoughBytesError};
 use kafka_protocol::protocol::{
-    types, Decodable, DecodeError, Encodable, EncodeError, HeaderVersion, StrBytes,
+    Decodable, DecodeError, Encodable, EncodeError, HeaderVersion, StrBytes,
 };
+use std::sync::RwLock;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::runtime::Handle;
-use std::sync::RwLock;
 use tokio_util::codec;
 use tracing::{debug, info};
 
-use crate::connection_pool::{open_new_broker_connection_if_needed, ProxyState, Url};
+use crate::connection_pool::{
+    open_new_broker_connection_if_needed, ProxyState, Url, CONDUKTOR_BORE_SERVER,
+};
 
 #[derive(Debug)]
-pub enum ErrorKind {
+pub(crate) enum ErrorKind {
     DecodeError,
     EncodeError,
     UnsupportedOperation,
     IoError(std::io::Error),
+}
+
+impl Default for ErrorKind {
+    fn default() -> Self {
+        Self::UnsupportedOperation
+    }
 }
 
 impl Display for ErrorKind {
@@ -83,12 +90,12 @@ impl From<NotEnoughBytesError> for ErrorKind {
     }
 }
 
-pub enum KafkaResponse {
+pub(crate) enum KafkaResponse {
     Metadata(i16, ResponseHeader, MetadataResponse),
     UndecodedResponse(BytesMut),
 }
 
-pub struct RequestKeyAndVersion {
+pub(crate) struct RequestKeyAndVersion {
     /// The API key of this request.
     pub api_key: ApiKey,
 
@@ -97,7 +104,7 @@ pub struct RequestKeyAndVersion {
 }
 
 #[derive(Clone)]
-pub struct KafkaServerCodec {
+pub(crate) struct KafkaServerCodec {
     length_codec: LengthDelimitedCodec,
     inflight: Arc<DashMap<i32, RequestKeyAndVersion>>,
 }
@@ -164,7 +171,7 @@ impl codec::Encoder<KafkaResponse> for KafkaServerCodec {
     }
 }
 
-pub async fn kafka_proxy<S1, S2>(
+pub(crate) async fn kafka_proxy<S1, S2>(
     local: S1,
     remote: S2,
     proxy_state: Arc<RwLock<ProxyState>>,
@@ -177,16 +184,13 @@ where
     let (remote_read, remote_write) = io::split(remote);
     let codec = KafkaServerCodec::new();
 
-    let broker_store: Arc<RwLock<IndexMap<BrokerId, MetadataResponseBroker>>> =
-        Arc::new(RwLock::new(IndexMap::new()));
-
     tokio::select! {
         res = remote_to_local(remote_read, local_write, codec.clone()) => res,
         res = local_to_remote(local_read, remote_write, codec,proxy_state) => res,
     }
 }
 
-pub async fn remote_to_local<S1, S2>(
+pub(crate) async fn remote_to_local<S1, S2>(
     remote_read: S1,
     mut local_write: S2,
     upstream_codec: KafkaServerCodec,
@@ -225,48 +229,7 @@ where
     Ok(())
 }
 
-// pub fn adapt_metadata(
-//     mut metadata: MetadataResponse,
-//     proxy_state: Arc<RwLock<ProxyState>>,
-// ) -> MetadataResponse {
-//     let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
-//
-//     //let mut lock = proxy_state.blocking_write();
-//
-//     // let inner_state  = proxy_state.clone();
-//
-//     // lock.open_new_broker_connection_if_needed(new_brokers).await;
-//     //tokio::task::spawn_blocking(move || {
-//     //    let mut inner_lock = inner_state.write().unwrap();
-//     //    futures::executor::block_on(inner_lock.open_new_broker_connection_if_needed(new_brokers))
-//     //});
-//
-//     Handle::current().block_on(tokio::spawn(async move {
-//         let mut lock = proxy_state.write().await;
-//         lock.open_new_broker_connection_if_needed(new_brokers).await;
-//         info!("mapping: {:?}", lock.connections);
-//
-//         for broker in metadata.brokers.values_mut() {
-//             info!("broker: {:?}", broker);
-//             let url = Url::new(broker.host.to_string(), broker.port as u16);
-//             debug!("url: {:?}", url);
-//
-//
-//             broker.host = StrBytes::from_str("bore.pub"); // FIXME
-//             broker.port = lock.get_remote_port(&url)
-//                 .unwrap() as i32;
-//         }
-//         metadata
-//
-//     })).unwrap()
-//     //futures::executor::block_on(lock.open_new_broker_connection_if_needed(new_brokers));
-//
-//
-//     //get the port from the broker store
-//     //apply port mapping to the broker list
-// }
-
-pub async fn adapt_metadata_async(
+pub(crate) async fn adapt_metadata_async(
     mut metadata: MetadataResponse,
     proxy_state: Arc<RwLock<ProxyState>>,
 ) -> MetadataResponse {
@@ -274,23 +237,16 @@ pub async fn adapt_metadata_async(
 
     open_new_broker_connection_if_needed(&proxy_state, new_brokers).await;
 
-    //get the port from the broker store
-    //apply port mapping to the broker list
-    //info!("mapping: {:?}", lock.connections);
-
     for broker in metadata.brokers.values_mut() {
         info!("broker: {:?}", broker);
         let url = Url::new(broker.host.to_string(), broker.port as u16);
-        broker.host = StrBytes::from_str("bore.pub"); // FIXME
-        broker.port = proxy_state.read().unwrap()
-            .get_remote_port(&url)
-            .unwrap() as i32;
+        broker.host = StrBytes::from_str(CONDUKTOR_BORE_SERVER);
+        broker.port = proxy_state.read().unwrap().get_remote_port(&url).unwrap() as i32;
     }
     metadata
 }
 
-
-pub async fn local_to_remote<S1, S2>(
+pub(crate) async fn local_to_remote<S1, S2>(
     local_read: S1,
     remote_write: S2,
     codec: KafkaServerCodec,
@@ -306,14 +262,19 @@ where
     source
         .then(|item| {
             let proxy_state = Arc::clone(&proxy_state);
-            async move { match item {
-            Ok(KafkaResponse::Metadata(version, header, response)) => Ok(KafkaResponse::Metadata(
-                version,
-                header,
-                adapt_metadata_async(response, proxy_state).await,
-            )),
-            other => other,
-        }}})
+            async move {
+                match item {
+                    Ok(KafkaResponse::Metadata(version, header, response)) => {
+                        Ok(KafkaResponse::Metadata(
+                            version,
+                            header,
+                            adapt_metadata_async(response, proxy_state).await,
+                        ))
+                    }
+                    other => other,
+                }
+            }
+        })
         .forward(sink)
         .await?;
     Ok(())
