@@ -17,9 +17,9 @@
 
 pub mod auth;
 pub mod client;
-///proxy state
-pub mod proxy_state;
 ///kafka proxy part
 pub mod kafka;
+///proxy state
+pub mod proxy_state;
 pub mod server;
 pub mod shared;
