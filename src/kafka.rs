@@ -233,7 +233,7 @@ pub(crate) async fn adapt_metadata_async(
     mut metadata: MetadataResponse,
     proxy_state: Arc<RwLock<ProxyState>>,
 ) -> MetadataResponse {
-    let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone().into();
+    let new_brokers: IndexMap<BrokerId, MetadataResponseBroker> = metadata.brokers.clone();
 
     open_new_broker_connection_if_needed(&proxy_state, new_brokers).await;
 

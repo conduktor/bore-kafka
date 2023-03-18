@@ -60,7 +60,7 @@ impl ProxyState {
     }
 
     fn connection_does_not_exist(&self, url: &Url) -> bool {
-        !self.connections.contains_key(&url)
+        !self.connections.contains_key(url)
     }
 }
 
@@ -100,7 +100,7 @@ pub async fn add_connection(state: &Arc<RwLock<ProxyState>>, url: Url) {
     let client = Client::new(
         &url.host,
         url.port,
-        &CONDUKTOR_BORE_SERVER,
+        CONDUKTOR_BORE_SERVER,
         0,
         secret.as_deref(),
         Arc::clone(state),
