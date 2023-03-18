@@ -3,10 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use conduktor_kafka_proxy::proxy_state::add_connection;
-use conduktor_kafka_proxy::{
-    proxy_state::{ProxyState, Url},
-    server::Server,
-};
+use conduktor_kafka_proxy::utils::parse_bootstrap_server;
+use conduktor_kafka_proxy::{proxy_state::ProxyState, server::Server};
 use std::sync::RwLock;
 
 #[derive(Parser, Debug)]
@@ -44,13 +42,6 @@ enum Command {
         #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
         secret: Option<String>,
     },
-}
-
-fn parse_bootstrap_server(bootstrap_server: String) -> Url {
-    let mut split = bootstrap_server.split(':');
-    let host = split.next().unwrap();
-    let port = split.next().unwrap().parse().unwrap();
-    Url::new(host.to_string(), port)
 }
 
 #[tokio::main]

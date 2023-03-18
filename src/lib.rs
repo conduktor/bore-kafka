@@ -23,3 +23,5 @@ pub mod kafka;
 pub mod proxy_state;
 pub mod server;
 pub mod shared;
+///utils
+pub mod utils;
