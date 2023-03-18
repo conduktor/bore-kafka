@@ -1,19 +1,19 @@
 //! Client implementation for the `bore` service.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Context, Result};
 
+use futures::future::{BoxFuture, FutureExt};
 use tokio::io::AsyncWriteExt;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
+use crate::connection_pool::ProxyState;
 use crate::kafka::kafka_proxy;
-use crate::shared::{
-    ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT,
-};
+use crate::shared::{ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT};
 
 /// State structure for the client.
 pub struct Client {
@@ -30,10 +30,13 @@ pub struct Client {
     local_port: u16,
 
     /// Port that is publicly available on the remote.
-    remote_port: u16,
+    pub remote_port: u16,
 
     /// Optional secret used to authenticate clients.
     auth: Option<Authenticator>,
+
+    /// connection pool
+    proxy_state: Arc<RwLock<ProxyState>>,
 }
 
 impl Client {
@@ -44,6 +47,7 @@ impl Client {
         to: &str,
         port: u16,
         secret: Option<&str>,
+        proxy_state: Arc<RwLock<ProxyState>>,
     ) -> Result<Self> {
         let mut stream = Delimited::new(connect_with_timeout(to, CONTROL_PORT).await?);
         let auth = secret.map(Authenticator::new);
@@ -71,12 +75,18 @@ impl Client {
             local_port,
             remote_port,
             auth,
+            proxy_state: proxy_state.clone(),
         })
     }
 
     /// Returns the port publicly available on the remote.
     pub fn remote_port(&self) -> u16 {
         self.remote_port
+    }
+
+    /// Handle a new connection.
+    pub fn listen_boxed(self) -> BoxFuture<'static, Result<()>> {
+        async move { self.listen().await }.boxed()
     }
 
     /// Start the client, listening for new connections.
@@ -93,7 +103,7 @@ impl Client {
                     tokio::spawn(
                         async move {
                             info!("new connection");
-                            match this.handle_connection(id).await {
+                            match Box::pin(this.handle_connection(id)).await {
                                 Ok(_) => info!("connection exited"),
                                 Err(err) => warn!(%err, "connection exited with error"),
                             }
@@ -118,7 +128,7 @@ impl Client {
         let parts = remote_conn.into_parts();
         debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
         local_conn.write_all(&parts.read_buf).await?; // mostly of the cases, this will be empty
-        kafka_proxy(local_conn, parts.io).await?;
+        kafka_proxy(local_conn, parts.io, self.proxy_state.clone()).await?;
         Ok(())
     }
 }
