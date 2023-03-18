@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use bore_cli::connection_pool::ProxyState;
-use bore_cli::{client::Client, server::Server, shared::CONTROL_PORT};
+use conduktor_kafka_proxy::connection_pool::ProxyState;
+use conduktor_kafka_proxy::{client::Client, server::Server, shared::CONTROL_PORT};
 use lazy_static::lazy_static;
 use rstest::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
