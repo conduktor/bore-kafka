@@ -11,7 +11,7 @@ use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
-use crate::connection_pool::ProxyState;
+use crate::proxy_state::ProxyState;
 use crate::kafka::kafka_proxy;
 use crate::shared::{ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT};
 

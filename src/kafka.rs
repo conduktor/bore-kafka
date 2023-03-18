@@ -21,7 +21,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec;
 use tracing::{debug, info};
 
-use crate::connection_pool::{
+use crate::proxy_state::{
     open_new_broker_connection_if_needed, ProxyState, Url, CONDUKTOR_BORE_SERVER,
 };
 

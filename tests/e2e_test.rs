@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use conduktor_kafka_proxy::connection_pool::ProxyState;
+use conduktor_kafka_proxy::proxy_state::ProxyState;
 use conduktor_kafka_proxy::{client::Client, server::Server, shared::CONTROL_PORT};
 use lazy_static::lazy_static;
 use rstest::*;
