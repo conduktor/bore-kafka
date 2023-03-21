@@ -89,11 +89,11 @@ pub async fn open_new_broker_connection_if_needed(
 }
 
 /// Add open a new connection to the bore server (because a new broker was detected)
-pub async fn add_connection(state: &Arc<RwLock<ProxyState>>, url: Url) {
+pub async fn add_connection(state: &Arc<RwLock<ProxyState>>, url: Url) -> u16{
     let secret = {
         let guard = state.read().unwrap();
         if !guard.connection_does_not_exist(&url) {
-            return;
+            return 0;
         }
         guard.secret.clone()
     };
@@ -117,4 +117,5 @@ pub async fn add_connection(state: &Arc<RwLock<ProxyState>>, url: Url) {
     );
 
     state.write().unwrap().connections.insert(url, port);
+    port 
 }

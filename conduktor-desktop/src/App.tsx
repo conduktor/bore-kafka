@@ -1,28 +1,26 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import reactLogo from "./assets/logo.png";
 import { invoke } from "@tauri-apps/api/tauri";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [remotePort, setRemotePort] = useState(0);
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
 
-  async function greet() {
+  async function start_proxy() {
     // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-    setGreetMsg(await invoke("greet", { name }));
+    console.log("start_proxy", host, port);
+    const rport: number = await invoke("start_proxy", { host, port });
+    console.log(rport);
+    setRemotePort(rport);
   }
 
   return (
     <div className="container">
-      <h1>Welcome to Tauri!</h1>
+      <h1>Welcome to the conduktor proxy manager</h1>
 
       <div className="row">
-        <a href="https://vitejs.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
         <a href="https://reactjs.org" target="_blank">
           <img src={reactLogo} className="logo react" alt="React logo" />
         </a>
@@ -34,18 +32,23 @@ function App() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            greet();
+            start_proxy();
           }}
         >
           <input
-            id="greet-input"
-            onChange={(e) => setName(e.currentTarget.value)}
-            placeholder="Enter a name..."
+            id="host-input"
+            onChange={(e) => setHost(e.currentTarget.value)}
+            placeholder="Enter a host..."
+          />     
+               <input
+            id="port-input"
+            onChange={(e) => setPort(e.currentTarget.value)}
+            placeholder="Enter a port..."
           />
-          <button type="submit">Greet</button>
+          <button type="submit">Launch the proxy</button>
         </form>
       </div>
-      <p>{greetMsg}</p>
+      <p>{remotePort}</p>
     </div>
   );
 }

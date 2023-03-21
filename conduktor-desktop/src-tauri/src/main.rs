@@ -7,24 +7,51 @@ use conduktor_kafka_proxy::utils::parse_bootstrap_server;
 use tauri::SystemTray;
 use tauri::SystemTrayEvent;
 use tauri::{CustomMenuItem, Menu, MenuItem, Submenu, SystemTrayMenu, SystemTrayMenuItem};
+use tracing::info;
 
 use std::sync::{Arc, RwLock};
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
+struct Plop {
+    pub connections: Vec<Arc<RwLock<ProxyState>>>,
+}
+
+impl Plop {
+
+    pub fn new() -> Self {
+        Self {
+            connections: Vec::new(),
+        }
+    }
+// Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
+
+}
+
+#[tauri::command]
+async fn start_proxy(host: String, port:String,plop:tauri::State<'_,Arc<RwLock<Plop>>>) -> u16 {
+    info!("Starting proxy on {}:{}", host, port);
 
     let proxy_state = Arc::new(RwLock::new(ProxyState::new(None)));
-    add_connection(
+    let p = add_connection(
         &proxy_state,
         parse_bootstrap_server("localhost:9092".into()),
     )
     .await;
 
-    start_tauri().await;
+    plop.write().unwrap().connections.push(proxy_state);
+    p
 }
 
-async fn start_tauri() {
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
+
+    let mut plop = Arc::new(RwLock::new(Plop::new()));
+
+
+    start_tauri(plop.clone()).await;
+}
+
+async fn start_tauri(plop:Arc<RwLock<Plop>>) {
     let quit = CustomMenuItem::new("quit".to_string(), "Quit");
     let close = CustomMenuItem::new("close".to_string(), "Close");
 
@@ -82,6 +109,8 @@ async fn start_tauri() {
             }
             _ => {}
         })
+        .manage(plop.clone())
+        .invoke_handler(tauri::generate_handler![start_proxy])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")
 }
