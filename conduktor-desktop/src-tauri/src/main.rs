@@ -1,25 +1,28 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use conduktor_kafka_proxy::proxy_state::add_connection;
-use conduktor_kafka_proxy::proxy_state::ProxyState;
-use conduktor_kafka_proxy::utils::parse_bootstrap_server;
-use tauri::SystemTray;
-use tauri::SystemTrayEvent;
-use tauri::{CustomMenuItem, Menu, MenuItem, Submenu, SystemTrayMenu, SystemTrayMenuItem};
-
 use std::sync::{Arc, RwLock};
+
+use tauri::*;
+use tracing::info;
+
+use conduktor_kafka_proxy::proxy_state::{add_connection, ProxyState};
+use conduktor_kafka_proxy::utils::parse_bootstrap_server;
+
+#[tauri::command]
+async fn start_connection(bootstrap_server: String) -> u16 {
+    let proxy_state = Arc::new(RwLock::new(ProxyState::new(None)));
+    add_connection(&proxy_state, parse_bootstrap_server(bootstrap_server)).await
+}
+
+#[tauri::command]
+async fn token(token: String) {
+    info!("token: {}", token);
+}
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-
-    let proxy_state = Arc::new(RwLock::new(ProxyState::new(None)));
-    add_connection(
-        &proxy_state,
-        parse_bootstrap_server("localhost:9092".into()),
-    )
-    .await;
 
     start_tauri().await;
 }
@@ -45,10 +48,10 @@ async fn start_tauri() {
 
     tauri::Builder::default()
         .setup(|app| {
-            let window = tauri::WindowBuilder::new(
+            tauri::WindowBuilder::new(
                 app,
                 "label",
-                tauri::WindowUrl::App("https://conduktor.conduktor.app/".into()),
+                tauri::WindowUrl::App("https://conduktor.stg.conduktor.app/".into()),
             )
             .build()?;
             Ok(())
@@ -79,9 +82,10 @@ async fn start_tauri() {
                     std::process::exit(0);
                 }
                 _ => {}
-            }
+            },
             _ => {}
         })
+        .invoke_handler(tauri::generate_handler![start_connection, token])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")
 }
