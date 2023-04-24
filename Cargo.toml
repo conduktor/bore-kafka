@@ -39,3 +39,5 @@ futures = "0.3.28"
 lazy_static = "1.4.0"
 rstest = "0.17.0"
 tokio = { version = "1.27.0", features = ["sync"] }
+testcontainers = "0.14.0"
+rdkafka = "0.29.0"

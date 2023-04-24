@@ -3,14 +3,22 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use conduktor_kafka_proxy::proxy_state::ProxyState;
-use conduktor_kafka_proxy::{client::Client, server::Server, shared::CONTROL_PORT};
+use futures_util::StreamExt;
 use lazy_static::lazy_static;
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::{ClientConfig, Message};
 use rstest::*;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use testcontainers::images::kafka;
+use testcontainers::images::kafka::Kafka;
+use testcontainers::{clients, Container};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time;
+
+use conduktor_kafka_proxy::proxy_state::ProxyState;
+use conduktor_kafka_proxy::{client::Client, server::Server, shared::CONTROL_PORT};
 
 lazy_static! {
     /// Guard to make sure that tests are run serially, not concurrently.
@@ -25,50 +33,86 @@ async fn spawn_server(secret: Option<&str>) {
     time::sleep(Duration::from_millis(50)).await;
 }
 
+/// Start a Kafka container, returning the container and server port.
+fn start_kafka(docker: &clients::Cli) -> (Container<Kafka>, u16) {
+    let kafka_node = docker.run(Kafka::default());
+    let local_port = kafka_node.get_host_port_ipv4(kafka::KAFKA_PORT);
+    (kafka_node, local_port)
+}
+
 /// Spawns a client with randomly assigned ports, returning the listener and remote address.
-async fn spawn_client(secret: Option<&str>) -> Result<(TcpListener, SocketAddr)> {
-    let listener = TcpListener::bind("localhost:0").await?;
-    let local_port = listener.local_addr()?.port();
+async fn spawn_client(secret: Option<&str>, port: u16) -> Result<SocketAddr> {
     let proxy_state = Arc::new(RwLock::new(ProxyState::new(None)));
-    let client = Client::new("localhost", local_port, "localhost", 0, secret, proxy_state).await?;
+    let client = Client::new("localhost", port, "localhost", 0, secret, proxy_state).await?;
     let remote_addr = ([127, 0, 0, 1], client.remote_port()).into();
     tokio::spawn(client.listen());
-    Ok((listener, remote_addr))
+    Ok(remote_addr)
 }
 
 #[rstest]
 #[tokio::test]
 async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>) -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
-
+    let docker = clients::Cli::default();
+    let (_kafka_node, local_port) = start_kafka(&docker);
     spawn_server(secret).await;
-    let (listener, addr) = spawn_client(secret).await?;
+    let addr = spawn_client(secret, local_port).await?;
+    let bootstrap_servers = addr.to_string();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await?;
-        let mut buf = [0u8; 11];
-        stream.read_exact(&mut buf).await?;
-        assert_eq!(&buf, b"hello world");
+    let producer = ClientConfig::new()
+        .set("bootstrap.servers", &bootstrap_servers)
+        .set("message.timeout.ms", "5000")
+        .create::<FutureProducer>()
+        .expect("Failed to create Kafka FutureProducer");
 
-        stream.write_all(b"I can send a message too!").await?;
-        anyhow::Ok(())
-    });
+    let consumer = ClientConfig::new()
+        .set("group.id", "conduktor-kafka-proxy")
+        .set("bootstrap.servers", &bootstrap_servers)
+        .set("session.timeout.ms", "6000")
+        .set("enable.auto.commit", "false")
+        .set("auto.offset.reset", "earliest")
+        .create::<StreamConsumer>()
+        .expect("Failed to create Kafka StreamConsumer");
 
-    let mut stream = TcpStream::connect(addr).await?;
-    stream.write_all(b"hello world").await?;
+    let topic = "test-topic";
 
-    //FIXME : debug these tests
+    let number_of_messages_to_produce = 5;
+    let expected: Vec<String> = (0..number_of_messages_to_produce)
+        .map(|i| format!("Message {}", i))
+        .collect();
 
-    // let mut buf = [0u8; 25];
-    // stream.read_exact(&mut buf).await.expect("read exact failed");
-    // assert_eq!(&buf, b"I can send a message too!");
+    for (i, message) in expected.iter().enumerate() {
+        producer
+            .send(
+                FutureRecord::to(topic)
+                    .payload(message)
+                    .key(&format!("Key {}", i)),
+                Duration::from_secs(0),
+            )
+            .await
+            .unwrap();
+    }
 
-    // Ensure that the client end of the stream is closed now.
-    // assert_eq!(stream.read(&mut buf).await?, 0);
+    consumer
+        .subscribe(&[topic])
+        .expect("Failed to subscribe to a topic");
 
-    // Also ensure that additional connections do not produce any data.
-    // let mut stream = TcpStream::connect(addr).await?;
-    // assert_eq!(stream.read(&mut buf).await?, 0);
+    let mut message_stream = consumer.stream();
+    for produced in expected {
+        let borrowed_message = tokio::time::timeout(Duration::from_secs(10), message_stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            produced,
+            borrowed_message
+                .unwrap()
+                .payload_view::<str>()
+                .unwrap()
+                .unwrap()
+        );
+    }
 
     Ok(())
 }
@@ -84,7 +128,7 @@ async fn mismatched_secret(
     let _guard = SERIAL_GUARD.lock().await;
 
     spawn_server(server_secret).await;
-    assert!(spawn_client(client_secret).await.is_err());
+    assert!(spawn_client(client_secret, 0).await.is_err());
 }
 
 #[tokio::test]
