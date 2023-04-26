@@ -3,11 +3,11 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use futures_util::StreamExt;
 use lazy_static::lazy_static;
-use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::{ClientConfig, Message};
+use rskafka::client::partition::Compression;
+use rskafka::client::ClientBuilder;
+use rskafka::record;
+use rskafka::time::OffsetDateTime;
 use rstest::*;
 use testcontainers::images::kafka;
 use testcontainers::images::kafka::Kafka;
@@ -57,24 +57,17 @@ async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>
     let (_kafka_node, local_port) = start_kafka(&docker);
     spawn_server(secret).await;
     let addr = spawn_client(secret, local_port).await?;
-    let bootstrap_servers = addr.to_string();
 
-    let producer = ClientConfig::new()
-        .set("bootstrap.servers", &bootstrap_servers)
-        .set("message.timeout.ms", "5000")
-        .create::<FutureProducer>()
-        .expect("Failed to create Kafka FutureProducer");
-
-    let consumer = ClientConfig::new()
-        .set("group.id", "conduktor-kafka-proxy")
-        .set("bootstrap.servers", &bootstrap_servers)
-        .set("session.timeout.ms", "6000")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .create::<StreamConsumer>()
-        .expect("Failed to create Kafka StreamConsumer");
-
+    let bootstrap_servers = vec![addr.to_string()];
     let topic = "test-topic";
+
+    let client = ClientBuilder::new(bootstrap_servers).build().await.unwrap();
+    let partition_client = client
+        .partition_client(
+            topic.to_owned(),
+            0, // partition
+        )
+        .unwrap();
 
     let number_of_messages_to_produce = 5;
     let expected: Vec<String> = (0..number_of_messages_to_produce)
@@ -82,36 +75,34 @@ async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>
         .collect();
 
     for (i, message) in expected.iter().enumerate() {
-        producer
-            .send(
-                FutureRecord::to(topic)
-                    .payload(message)
-                    .key(&format!("Key {}", i)),
-                Duration::from_secs(0),
+        partition_client
+            .produce(
+                vec![record::Record {
+                    key: Some(format!("Key {}", i).as_bytes().into()),
+                    value: Some(message.as_bytes().into()),
+                    headers: Default::default(),
+                    timestamp: OffsetDateTime::now_utc(),
+                }],
+                Compression::NoCompression,
             )
             .await
             .unwrap();
     }
 
-    consumer
-        .subscribe(&[topic])
-        .expect("Failed to subscribe to a topic");
-
-    let mut message_stream = consumer.stream();
-    for produced in expected {
-        let borrowed_message = tokio::time::timeout(Duration::from_secs(10), message_stream.next())
+    let mut offset: usize = 0;
+    while offset < number_of_messages_to_produce {
+        let consumed = partition_client
+            .fetch_records(offset as i64, 0..1_000_000, 10_000)
             .await
             .unwrap()
-            .unwrap();
+            .0;
 
-        assert_eq!(
-            produced,
-            borrowed_message
-                .unwrap()
-                .payload_view::<str>()
-                .unwrap()
-                .unwrap()
-        );
+        let consumed: Vec<String> = consumed
+            .into_iter()
+            .map(|r| String::from_utf8(r.record.value.unwrap()).unwrap())
+            .collect();
+        assert_eq!(consumed, expected[offset..offset + consumed.len()]);
+        offset += consumed.len();
     }
 
     Ok(())
