@@ -51,6 +51,7 @@ async fn spawn_client(secret: Option<&str>, port: u16) -> Result<SocketAddr> {
 
 #[rstest]
 #[tokio::test]
+#[cfg_attr(not(feature = "integration_tests"), ignore)]
 async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>) -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
     let docker = clients::Cli::default();

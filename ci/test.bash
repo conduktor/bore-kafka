@@ -13,4 +13,5 @@ required_arg $CROSS 'CROSS'
 required_arg $TARGET_TRIPLE '<Target Triple>'
 
 $CROSS test --target $TARGET_TRIPLE
-$CROSS test --target $TARGET_TRIPLE --all-features
+# Note: integration tests are not supported with cross (requires docker)
+#$CROSS test --target $TARGET_TRIPLE --all-features

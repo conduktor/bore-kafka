@@ -41,3 +41,6 @@ rstest = "0.17.0"
 tokio = { version = "1.28.0", features = ["sync"] }
 testcontainers = "0.14.0"
 rskafka = { version = "0.3.0", default-features = false }
+
+[features]
+integration_tests = []
