@@ -280,6 +280,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "string",
  "testcontainers",
  "tokio",
  "tokio-util",
