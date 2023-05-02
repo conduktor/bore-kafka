@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use conduktor_kafka_proxy::proxy_state::add_connection;
-use conduktor_kafka_proxy::utils::parse_bootstrap_server;
-use conduktor_kafka_proxy::{proxy_state::ProxyState, server::Server};
-use std::sync::RwLock;
+use conduktor_kafka_proxy::kafka::KafkaProxy;
+use conduktor_kafka_proxy::server::Server;
+use conduktor_kafka_proxy::CONDUKTOR_BORE_SERVER;
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
@@ -51,9 +49,11 @@ async fn run(command: Command) -> Result<()> {
             bootstrap_server,
             secret,
         } => {
-            let proxy_state = Arc::new(RwLock::new(ProxyState::new(secret)));
-            add_connection(&proxy_state, parse_bootstrap_server(bootstrap_server)).await;
-            return_infinite_future().await;
+            let remote = KafkaProxy::new(CONDUKTOR_BORE_SERVER, secret.as_deref())
+                .start(&bootstrap_server)
+                .await?;
+            info!("Started proxy on {}", remote);
+            futures::pending!();
         }
         Command::Server { min_port, secret } => {
             Server::new(min_port, secret.as_deref()).listen().await?;
@@ -61,12 +61,6 @@ async fn run(command: Command) -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn return_infinite_future() {
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-    }
 }
 
 fn main() -> Result<()> {

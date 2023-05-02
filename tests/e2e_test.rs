@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -17,8 +15,8 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time;
 
-use conduktor_kafka_proxy::proxy_state::ProxyState;
-use conduktor_kafka_proxy::{client::Client, server::Server, shared::CONTROL_PORT};
+use conduktor_kafka_proxy::kafka::KafkaProxy;
+use conduktor_kafka_proxy::{server::Server, shared::CONTROL_PORT};
 
 lazy_static! {
     /// Guard to make sure that tests are run serially, not concurrently.
@@ -33,20 +31,19 @@ async fn spawn_server(secret: Option<&str>) {
     time::sleep(Duration::from_millis(50)).await;
 }
 
-/// Start a Kafka container, returning the container and server port.
-fn start_kafka(docker: &clients::Cli) -> (Container<Kafka>, u16) {
+/// Start a Kafka container, returning the container and its bootstrap servers.
+fn start_kafka(docker: &clients::Cli) -> (Container<Kafka>, String) {
     let kafka_node = docker.run(Kafka::default());
     let local_port = kafka_node.get_host_port_ipv4(kafka::KAFKA_PORT);
-    (kafka_node, local_port)
+    (kafka_node, format!("127.0.0.1:{}", local_port))
 }
 
 /// Spawns a client with randomly assigned ports, returning the listener and remote address.
-async fn spawn_client(secret: Option<&str>, port: u16) -> Result<SocketAddr> {
-    let proxy_state = Arc::new(RwLock::new(ProxyState::new(None)));
-    let client = Client::new("localhost", port, "localhost", 0, secret, proxy_state).await?;
-    let remote_addr = ([127, 0, 0, 1], client.remote_port()).into();
-    tokio::spawn(client.listen());
-    Ok(remote_addr)
+async fn spawn_proxy(secret: Option<&str>, bootstrap_servers: &str) -> Result<String> {
+    let remote = KafkaProxy::new("localhost", secret)
+        .start(bootstrap_servers)
+        .await?;
+    Ok(remote)
 }
 
 #[rstest]
@@ -55,11 +52,11 @@ async fn spawn_client(secret: Option<&str>, port: u16) -> Result<SocketAddr> {
 async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>) -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
     let docker = clients::Cli::default();
-    let (_kafka_node, local_port) = start_kafka(&docker);
+    let (_kafka_node, bootstrap_servers) = start_kafka(&docker);
     spawn_server(secret).await;
-    let addr = spawn_client(secret, local_port).await?;
 
-    let bootstrap_servers = vec![addr.to_string()];
+    let remote = spawn_proxy(secret, &bootstrap_servers).await?;
+    let bootstrap_servers = vec![remote];
     let topic = "test-topic";
 
     let client = ClientBuilder::new(bootstrap_servers).build().await.unwrap();
@@ -120,26 +117,17 @@ async fn mismatched_secret(
     let _guard = SERIAL_GUARD.lock().await;
 
     spawn_server(server_secret).await;
-    assert!(spawn_client(client_secret, 0).await.is_err());
+    assert!(spawn_proxy(client_secret, "localhost:0").await.is_err());
 }
 
 #[tokio::test]
 async fn invalid_address() -> Result<()> {
     // We don't need the serial guard for this test because it doesn't create a server.
     async fn check_address(to: &str, use_secret: bool) -> Result<()> {
-        let proxy_state = Arc::new(RwLock::new(ProxyState::new(
-            use_secret.then_some(TEST_SECRET.to_string()),
-        )));
-        match Client::new(
-            "localhost",
-            5000,
-            to,
-            0,
-            use_secret.then_some(TEST_SECRET),
-            proxy_state,
-        )
-        .await
-        {
+        let result = KafkaProxy::new(to, use_secret.then_some(TEST_SECRET))
+            .start("localhost:0")
+            .await;
+        match result {
             Ok(_) => Err(anyhow!("expected error for {to}, use_secret={use_secret}")),
             Err(_) => Ok(()),
         }

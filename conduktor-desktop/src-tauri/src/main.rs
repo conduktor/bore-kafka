@@ -1,18 +1,17 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::{Arc, RwLock};
-
 use tauri::*;
 use tracing::info;
-
-use conduktor_kafka_proxy::proxy_state::{add_connection, ProxyState};
-use conduktor_kafka_proxy::utils::parse_bootstrap_server;
+use conduktor_kafka_proxy::CONDUKTOR_BORE_SERVER;
+use conduktor_kafka_proxy::kafka::KafkaProxy;
 
 #[tauri::command]
-async fn start_connection(bootstrap_server: String) -> u16 {
-    let proxy_state = Arc::new(RwLock::new(ProxyState::new(None)));
-    add_connection(&proxy_state, parse_bootstrap_server(bootstrap_server)).await
+async fn start_connection(bootstrap_server: String) -> String {
+    KafkaProxy::new(CONDUKTOR_BORE_SERVER, None)
+        .start(&bootstrap_server)
+        .await
+        .unwrap()
 }
 
 #[tauri::command]
