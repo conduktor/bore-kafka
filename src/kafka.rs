@@ -1,21 +1,21 @@
 //! Kafka proxy implementation
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::mem::size_of;
+use std::result;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
+use anyhow::*;
 use bytes::{Buf, BufMut, BytesMut};
 use codec::LengthDelimitedCodec;
 use dashmap::DashMap;
-use futures_util::future::join_all;
+use futures_util::future::try_join_all;
 use futures_util::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use kafka_protocol::messages::metadata_response::MetadataResponseBroker;
 use kafka_protocol::messages::*;
-use kafka_protocol::protocol::buf::{ByteBuf, NotEnoughBytesError};
+use kafka_protocol::protocol::buf::ByteBuf;
 use kafka_protocol::protocol::*;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -24,55 +24,6 @@ use tracing::debug;
 
 use crate::auth::Authenticator;
 use crate::client::Client;
-
-#[derive(Debug)]
-pub(crate) enum ErrorKind {
-    Decode,
-    Encode,
-    Io(std::io::Error),
-}
-
-impl Display for ErrorKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ErrorKind::Decode => {
-                writeln!(f, "Error decoding message")
-            }
-            ErrorKind::Encode => {
-                writeln!(f, "Error encoding message")
-            }
-            ErrorKind::Io(err) => {
-                writeln!(f, "IoError: {}", err)
-            }
-        }
-    }
-}
-
-impl Error for ErrorKind {}
-
-impl From<std::io::Error> for ErrorKind {
-    fn from(err: std::io::Error) -> Self {
-        ErrorKind::Io(err)
-    }
-}
-
-impl From<DecodeError> for ErrorKind {
-    fn from(_err: DecodeError) -> Self {
-        ErrorKind::Decode
-    }
-}
-
-impl From<EncodeError> for ErrorKind {
-    fn from(_err: EncodeError) -> Self {
-        ErrorKind::Encode
-    }
-}
-
-impl From<NotEnoughBytesError> for ErrorKind {
-    fn from(_err: NotEnoughBytesError) -> Self {
-        ErrorKind::Decode
-    }
-}
 
 enum KafkaResponse {
     Metadata(i16, ResponseHeader, MetadataResponse),
@@ -107,7 +58,7 @@ impl KafkaServerCodec {
 
 impl codec::Decoder for KafkaServerCodec {
     type Item = KafkaResponse;
-    type Error = ErrorKind;
+    type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if let Some(mut bytes) = self.length_codec.decode(src)? {
@@ -137,7 +88,7 @@ impl codec::Decoder for KafkaServerCodec {
 }
 
 impl codec::Encoder<KafkaResponse> for KafkaServerCodec {
-    type Error = ErrorKind;
+    type Error = Error;
 
     fn encode(&mut self, item: KafkaResponse, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
@@ -178,13 +129,13 @@ impl From<&MetadataResponseBroker> for KafkaBroker {
 }
 
 impl FromStr for KafkaBroker {
-    type Err = String;
+    type Err = Error;
 
     fn from_str(bootstrap_server: &str) -> Result<Self, Self::Err> {
         let mut split = bootstrap_server.split(':');
-        let host = split.next().ok_or("no host provided")?;
-        let port = split.next().ok_or("no port provided")?;
-        let port = port.parse().or(Err("invalid port"))?;
+        let host = split.next().ok_or(Error::msg("no host provided"))?;
+        let port = split.next().ok_or(Error::msg("no port provided"))?;
+        let port = port.parse().context("invalid port")?;
         Ok(KafkaBroker::new(host.to_string(), port))
     }
 }
@@ -214,7 +165,7 @@ impl KafkaProxy {
     }
 
     /// Start the proxy, returning the remote bootstrap server to use for connecting.
-    pub async fn start(self, bootstrap_servers: &str) -> anyhow::Result<String> {
+    pub async fn start(self, bootstrap_servers: &str) -> Result<String> {
         let this = Arc::new(self);
         let url = bootstrap_servers.parse().map_err(anyhow::Error::msg)?;
         let remote_port = this.add_connection(url).await?;
@@ -222,11 +173,7 @@ impl KafkaProxy {
     }
 
     /// proxy a connection
-    pub(crate) async fn kafka_proxy<S1, S2>(
-        self: &Arc<Self>,
-        local: S1,
-        remote: S2,
-    ) -> Result<(), ErrorKind>
+    pub(crate) async fn kafka_proxy<S1, S2>(self: &Arc<Self>, local: S1, remote: S2) -> Result<()>
     where
         S1: AsyncRead + AsyncWrite + Unpin,
         S2: AsyncRead + AsyncWrite + Unpin,
@@ -245,7 +192,7 @@ impl KafkaProxy {
         remote_read: S1,
         mut local_write: S2,
         upstream_codec: KafkaServerCodec,
-    ) -> Result<(), ErrorKind>
+    ) -> Result<()>
     where
         S1: AsyncRead + Unpin,
         S2: AsyncWrite + Unpin,
@@ -257,7 +204,11 @@ impl KafkaProxy {
 
         let mut source = codec::FramedRead::new(remote_read, codec);
 
-        while let Some(mut bytes) = source.try_next().await? {
+        while let Some(mut bytes) = source
+            .try_next()
+            .await
+            .context("reading from local Kafka")?
+        {
             let api_key = bytes.peek_bytes(4..6).get_i16();
             debug!("api_key: {}", api_key);
             if api_key == ApiKey::MetadataKey as i16 {
@@ -274,7 +225,10 @@ impl KafkaProxy {
                     },
                 );
             };
-            local_write.write_all_buf(&mut bytes).await?;
+            local_write
+                .write_all_buf(&mut bytes)
+                .await
+                .context("writing from local Kafka")?;
         }
 
         Ok(())
@@ -285,7 +239,7 @@ impl KafkaProxy {
         local_read: S1,
         remote_write: S2,
         codec: KafkaServerCodec,
-    ) -> Result<(), ErrorKind>
+    ) -> Result<()>
     where
         S1: AsyncRead + Unpin,
         S2: AsyncWrite + Unpin,
@@ -298,41 +252,50 @@ impl KafkaProxy {
                 let this = Arc::clone(self);
                 async move {
                     match item {
-                        Ok(KafkaResponse::Metadata(version, header, response)) => {
+                        result::Result::Ok(KafkaResponse::Metadata(version, header, response)) => {
                             Ok(KafkaResponse::Metadata(
                                 version,
                                 header,
-                                this.adapt_metadata(response).await,
+                                this.adapt_metadata(response)
+                                    .await
+                                    .context("rewriting metadata response")?,
                             ))
                         }
-                        other => other,
+                        other => other.context("decoding kafka request"),
                     }
                 }
             })
             .forward(sink)
-            .await?;
+            .await
+            .context("reading/writing to remote server")?;
         Ok(())
     }
 
-    async fn adapt_metadata(self: &Arc<Self>, mut metadata: MetadataResponse) -> MetadataResponse {
+    async fn adapt_metadata(
+        self: &Arc<Self>,
+        mut metadata: MetadataResponse,
+    ) -> Result<MetadataResponse> {
         self.open_new_broker_connection_if_needed(&metadata.brokers)
-            .await;
+            .await?;
 
         let connections = self.connections.read().unwrap();
         for broker in metadata.brokers.values_mut() {
             debug!("broker: {:?}", broker);
             let url = KafkaBroker::new(broker.host.to_string(), broker.port as u16);
             broker.host = unsafe { StrBytes::from_utf8_unchecked(self.to.clone().into()) }; // self.to is a String so it's safe, but the api is lacking this conversion.
-            broker.port = *connections.get(&url).unwrap() as i32;
+            broker.port = *connections
+                .get(&url)
+                .ok_or(Error::msg("unable to forward broker connection"))?
+                as i32;
         }
-        metadata
+        Ok(metadata)
     }
 
     /// Open a new connection to a broker if needed (if the broker is not already in the ref list)
     async fn open_new_broker_connection_if_needed(
         self: &Arc<Self>,
         brokers: &IndexMap<BrokerId, MetadataResponseBroker>,
-    ) {
+    ) -> Result<()> {
         let mut unknown_brokers = vec![];
 
         {
@@ -345,17 +308,20 @@ impl KafkaProxy {
             }
         }
 
-        join_all(
+        try_join_all(
             unknown_brokers
                 .into_iter()
                 .map(|url| self.add_connection(url)),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     /// Add open a new connection to the bore server (because a new broker was detected)
-    async fn add_connection(self: &Arc<Self>, url: KafkaBroker) -> anyhow::Result<u16> {
-        let client = Client::new(&url.host, url.port, Arc::clone(self)).await?;
+    async fn add_connection(self: &Arc<Self>, url: KafkaBroker) -> Result<u16> {
+        let client = Client::new(&url.host, url.port, Arc::clone(self))
+            .await
+            .context("creating client")?;
 
         let remote_port = client.remote_port();
         self.connections.write().unwrap().insert(url, remote_port);
