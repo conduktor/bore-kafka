@@ -12,10 +12,13 @@
 //! server network daemon and client local forwarding proxy. Both are public
 //! members and can be run programmatically with a Tokio 1.0 runtime.
 
-#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod auth;
 pub mod client;
+pub mod kafka;
 pub mod server;
 pub mod shared;
+
+/// bore server
+pub const CONDUKTOR_BORE_SERVER: &str = "bore.pub";

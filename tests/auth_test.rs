@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bore_cli::{auth::Authenticator, shared::Delimited};
+use conduktor_kafka_proxy::{auth::Authenticator, shared::Delimited};
 use tokio::io::{self};
 
 #[tokio::test]

@@ -1,19 +1,29 @@
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use bore_cli::{client::Client, server::Server, shared::CONTROL_PORT};
 use lazy_static::lazy_static;
+use rskafka::client::partition::Compression;
+use rskafka::client::ClientBuilder;
+use rskafka::record;
+use rskafka::time::OffsetDateTime;
 use rstest::*;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use testcontainers::images::kafka;
+use testcontainers::images::kafka::Kafka;
+use testcontainers::{clients, Container};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time;
+
+use conduktor_kafka_proxy::kafka::KafkaProxy;
+use conduktor_kafka_proxy::{server::Server, shared::CONTROL_PORT};
 
 lazy_static! {
     /// Guard to make sure that tests are run serially, not concurrently.
     static ref SERIAL_GUARD: Mutex<()> = Mutex::new(());
 }
+
+const TEST_SECRET: &str = "a secret";
 
 /// Spawn the server, giving some time for the control port TcpListener to start.
 async fn spawn_server(secret: Option<&str>) {
@@ -21,47 +31,77 @@ async fn spawn_server(secret: Option<&str>) {
     time::sleep(Duration::from_millis(50)).await;
 }
 
+/// Start a Kafka container, returning the container and its bootstrap servers.
+fn start_kafka(docker: &clients::Cli) -> (Container<Kafka>, String) {
+    let kafka_node = docker.run(Kafka::default());
+    let local_port = kafka_node.get_host_port_ipv4(kafka::KAFKA_PORT);
+    (kafka_node, format!("127.0.0.1:{}", local_port))
+}
+
 /// Spawns a client with randomly assigned ports, returning the listener and remote address.
-async fn spawn_client(secret: Option<&str>) -> Result<(TcpListener, SocketAddr)> {
-    let listener = TcpListener::bind("localhost:0").await?;
-    let local_port = listener.local_addr()?.port();
-    let client = Client::new("localhost", local_port, "localhost", 0, secret).await?;
-    let remote_addr = ([127, 0, 0, 1], client.remote_port()).into();
-    tokio::spawn(client.listen());
-    Ok((listener, remote_addr))
+async fn spawn_proxy(secret: Option<&str>, bootstrap_servers: &str) -> Result<String> {
+    let remote = KafkaProxy::new("localhost", secret)
+        .start(bootstrap_servers)
+        .await?;
+    Ok(remote)
 }
 
 #[rstest]
 #[tokio::test]
+#[cfg_attr(not(feature = "integration_tests"), ignore)]
 async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>) -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
-
+    let docker = clients::Cli::default();
+    let (_kafka_node, bootstrap_servers) = start_kafka(&docker);
     spawn_server(secret).await;
-    let (listener, addr) = spawn_client(secret).await?;
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await?;
-        let mut buf = [0u8; 11];
-        stream.read_exact(&mut buf).await?;
-        assert_eq!(&buf, b"hello world");
+    let remote = spawn_proxy(secret, &bootstrap_servers).await?;
+    let bootstrap_servers = vec![remote];
+    let topic = "test-topic";
 
-        stream.write_all(b"I can send a message too!").await?;
-        anyhow::Ok(())
-    });
+    let client = ClientBuilder::new(bootstrap_servers).build().await.unwrap();
+    let partition_client = client
+        .partition_client(
+            topic.to_owned(),
+            0, // partition
+        )
+        .unwrap();
 
-    let mut stream = TcpStream::connect(addr).await?;
-    stream.write_all(b"hello world").await?;
+    let number_of_messages_to_produce = 5;
+    let expected: Vec<String> = (0..number_of_messages_to_produce)
+        .map(|i| format!("Message {}", i))
+        .collect();
 
-    let mut buf = [0u8; 25];
-    stream.read_exact(&mut buf).await?;
-    assert_eq!(&buf, b"I can send a message too!");
+    for (i, message) in expected.iter().enumerate() {
+        partition_client
+            .produce(
+                vec![record::Record {
+                    key: Some(format!("Key {}", i).as_bytes().into()),
+                    value: Some(message.as_bytes().into()),
+                    headers: Default::default(),
+                    timestamp: OffsetDateTime::now_utc(),
+                }],
+                Compression::NoCompression,
+            )
+            .await
+            .unwrap();
+    }
 
-    // Ensure that the client end of the stream is closed now.
-    assert_eq!(stream.read(&mut buf).await?, 0);
+    let mut offset: usize = 0;
+    while offset < number_of_messages_to_produce {
+        let consumed = partition_client
+            .fetch_records(offset as i64, 0..1_000_000, 10_000)
+            .await
+            .unwrap()
+            .0;
 
-    // Also ensure that additional connections do not produce any data.
-    let mut stream = TcpStream::connect(addr).await?;
-    assert_eq!(stream.read(&mut buf).await?, 0);
+        let consumed: Vec<String> = consumed
+            .into_iter()
+            .map(|r| String::from_utf8(r.record.value.unwrap()).unwrap())
+            .collect();
+        assert_eq!(consumed, expected[offset..offset + consumed.len()]);
+        offset += consumed.len();
+    }
 
     Ok(())
 }
@@ -77,14 +117,17 @@ async fn mismatched_secret(
     let _guard = SERIAL_GUARD.lock().await;
 
     spawn_server(server_secret).await;
-    assert!(spawn_client(client_secret).await.is_err());
+    assert!(spawn_proxy(client_secret, "localhost:0").await.is_err());
 }
 
 #[tokio::test]
 async fn invalid_address() -> Result<()> {
     // We don't need the serial guard for this test because it doesn't create a server.
     async fn check_address(to: &str, use_secret: bool) -> Result<()> {
-        match Client::new("localhost", 5000, to, 0, use_secret.then_some("a secret")).await {
+        let result = KafkaProxy::new(to, use_secret.then_some(TEST_SECRET))
+            .start("localhost:0")
+            .await;
+        match result {
             Ok(_) => Err(anyhow!("expected error for {to}, use_secret={use_secret}")),
             Err(_) => Ok(()),
         }

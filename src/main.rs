@@ -1,6 +1,9 @@
 use anyhow::Result;
-use bore_cli::{client::Client, server::Server};
 use clap::{Parser, Subcommand};
+use conduktor_kafka_proxy::kafka::KafkaProxy;
+use conduktor_kafka_proxy::server::Server;
+use conduktor_kafka_proxy::CONDUKTOR_BORE_SERVER;
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
@@ -11,22 +14,16 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Starts a local proxy to the remote server.
-    Local {
-        /// The local port to expose.
-        local_port: u16,
-
+    /// Starts a local LocalProxy to the remote server.
+    Start {
         /// The local host to expose.
-        #[clap(short, long, value_name = "HOST", default_value = "localhost")]
-        local_host: String,
-
-        /// Address of the remote server to expose local ports to.
-        #[clap(short, long, env = "BORE_SERVER")]
-        to: String,
-
-        /// Optional port on the remote server to select.
-        #[clap(short, long, default_value_t = 0)]
-        port: u16,
+        #[clap(
+            short,
+            long,
+            value_name = "BOOTSTRAP_SERVER",
+            default_value = "localhost:9092"
+        )]
+        bootstrap_server: String,
 
         /// Optional secret for authentication.
         #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
@@ -48,15 +45,15 @@ enum Command {
 #[tokio::main]
 async fn run(command: Command) -> Result<()> {
     match command {
-        Command::Local {
-            local_host,
-            local_port,
-            to,
-            port,
+        Command::Start {
+            bootstrap_server,
             secret,
         } => {
-            let client = Client::new(&local_host, local_port, &to, port, secret.as_deref()).await?;
-            client.listen().await?;
+            let remote = KafkaProxy::new(CONDUKTOR_BORE_SERVER, secret.as_deref())
+                .start(&bootstrap_server)
+                .await?;
+            info!("Started proxy on {}", remote);
+            futures::pending!();
         }
         Command::Server { min_port, secret } => {
             Server::new(min_port, secret.as_deref()).listen().await?;
