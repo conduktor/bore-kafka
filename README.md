@@ -1,11 +1,21 @@
-# bore
+# <img src="https://user-images.githubusercontent.com/2573301/192741305-0e1441a4-308b-4308-947a-656a1dc53577.png" width="25"> bore-kafka
+
+[![discord](https://img.shields.io/badge/chat-on%20discord-yellowgreen)](https://discord.com/channels/861899833970262046/861899833970262049)
+[![twitter](https://img.shields.io/twitter/follow/getconduktor.svg?style=social)](https://twitter.com/getconduktor)
+
+This is a fork of the https://github.com/ekzhang/bore project to be able to work with Apache Kafka.
+
+Thanks to this, it's possible to establish a connection from your private or localhost cluster to a public cloud infrastructure such as Conduktor https://www.conduktor.io.
+
+# How to run it?
+
+If you have a Kafka running on `localhost:9092` for instance:
+
 ```shell
 cargo run kafka-proxy --bootstrap-server localhost:9092
 ```
 
-This will expose your local port and all the others retruned by kafka at `localhost:9092` to the public internet at `bore.pub:<PORT>`, where the port number is assigned randomly.
-
-
+This will expose your local port and all the others returned by kafka at `localhost:9092` to the public internet at `bore.pub:<PORT>`, where the port number is assigned randomly.
 
 ## Detailed Usage
 
